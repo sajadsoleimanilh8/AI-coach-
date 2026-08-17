@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-dotenv
+sqlalchemy
+aiosqlite
+pyyaml
+httpx
+aiofiles
+tiktoken
+pypdf
+python-docx
+numpy
+pytest
+pytest-asyncio

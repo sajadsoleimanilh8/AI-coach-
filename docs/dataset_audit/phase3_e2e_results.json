@@ -1,0 +1,308 @@
+[
+  {
+    "clip": "0c9bd797-94c1-42ff-901a-a04221b17083.mp4",
+    "frames_in_trim": 140,
+    "start_frame": 200,
+    "fps": 25.0,
+    "resolution": "854x480",
+    "frames_processed": 140,
+    "players_tracked": 37,
+    "events_detected": 0,
+    "player_metrics_written": 333,
+    "team_metrics_written": 10,
+    "homography_confidence": 0.0,
+    "calibration_valid_fraction": 0.0,
+    "calibration_episodes": 1,
+    "detectors_available": [
+      "ball",
+      "field",
+      "goalpost"
+    ],
+    "db": {
+      "player_tracking_rows": 592,
+      "frames_rows": 28,
+      "events": 0,
+      "player_metrics": 333,
+      "team_metrics": 10,
+      "calibration_status_rows": 1
+    },
+    "event_types": {},
+    "team_metrics_by_team": {
+      "team-away": {
+        "formation": {
+          "value": null,
+          "confidence": "low_upstream_confidence",
+          "method": "heuristic_proxy"
+        },
+        "compactness_score": {
+          "value": null,
+          "confidence": "low_upstream_confidence",
+          "method": "deterministic"
+        },
+        "formation_stability_score": {
+          "value": null,
+          "confidence": "low_upstream_confidence",
+          "method": "deterministic"
+        },
+        "weak_zone_map": {
+          "value": null,
+          "confidence": "low_upstream_confidence",
+          "method": "heuristic_proxy"
+        },
+        "pressing_intensity_score": {
+          "value": null,
+          "confidence": "low_upstream_confidence",
+          "method": "heuristic_proxy"
+        }
+      },
+      "team-home": {
+        "formation": {
+          "value": null,
+          "confidence": "low_upstream_confidence",
+          "method": "heuristic_proxy"
+        },
+        "compactness_score": {
+          "value": null,
+          "confidence": "low_upstream_confidence",
+          "method": "deterministic"
+        },
+        "formation_stability_score": {
+          "value": null,
+          "confidence": "low_upstream_confidence",
+          "method": "deterministic"
+        },
+        "weak_zone_map": {
+          "value": null,
+          "confidence": "low_upstream_confidence",
+          "method": "heuristic_proxy"
+        },
+        "pressing_intensity_score": {
+          "value": null,
+          "confidence": "low_upstream_confidence",
+          "method": "heuristic_proxy"
+        }
+      }
+    },
+    "calibration_invalid_reasons": [
+      "no pitch keypoints above the visibility floor"
+    ],
+    "calibration_valid_episodes": 0,
+    "honesty_contract_violations": [],
+    "stage_timings_s": {
+      "detection_tracking": 11.3153,
+      "team_assignment": 0.1868,
+      "frame_synchronisation": 28.3309,
+      "calibration_history": 0.0056,
+      "pitch_trajectory": 0.0005,
+      "role_inference": 0.0001,
+      "attacking_direction": 0.0,
+      "pose_estimation": 5.5729,
+      "db_write_tracking": 0.0259,
+      "event_heuristics": 0.0002,
+      "team_scoring": 0.0034,
+      "player_scoring": 0.0122
+    },
+    "total_pipeline_seconds": 45.4538,
+    "simulation": {
+      "teams_available": [
+        "team-away",
+        "team-home"
+      ],
+      "interventions": [
+        "team team-away compactness +10.0%"
+      ],
+      "is_reinforcement_learning": false,
+      "n_metrics": 3,
+      "metrics": [
+        {
+          "metric_name": "compactness_score",
+          "team_id": "team-away",
+          "baseline_value": null,
+          "simulated_value": null,
+          "delta": null,
+          "confidence": "low_upstream_confidence",
+          "method": "heuristic_proxy",
+          "recomputed_by": "ai.team_intelligence.formation_stability.team_shape.compute_compactness"
+        },
+        {
+          "metric_name": "formation",
+          "team_id": "team-away",
+          "baseline_value": null,
+          "simulated_value": null,
+          "delta": null,
+          "confidence": "low_upstream_confidence",
+          "method": "heuristic_proxy",
+          "recomputed_by": "ai.computer_vision.tactical_analysis.formation_detection.detect_formation"
+        },
+        {
+          "metric_name": "weak_zone_map",
+          "team_id": "team-away",
+          "baseline_value": null,
+          "simulated_value": null,
+          "delta": null,
+          "confidence": "low_upstream_confidence",
+          "method": "heuristic_proxy",
+          "recomputed_by": "ai.team_intelligence.weak_zone_detection.weak_zones.compute_weak_zones"
+        }
+      ],
+      "unavailable": [
+        "compactness_score for team team-away: baseline is unavailable (low_sample), so no simulated value is reported",
+        "formation for team team-away: baseline is unavailable (low_sample), so no simulated value is reported",
+        "weak_zone_map for team team-away: baseline is unavailable (low_sample), so no simulated value is reported"
+      ]
+    }
+  },
+  {
+    "clip": "2696a665-99ae-47d8-bb82-ab6fd0c8ce89.mp4",
+    "frames_in_trim": 140,
+    "start_frame": 200,
+    "fps": 29.97,
+    "resolution": "1280x720",
+    "frames_processed": 140,
+    "players_tracked": 59,
+    "events_detected": 0,
+    "player_metrics_written": 531,
+    "team_metrics_written": 10,
+    "homography_confidence": 0.0,
+    "calibration_valid_fraction": 0.0,
+    "calibration_episodes": 1,
+    "detectors_available": [
+      "ball",
+      "field",
+      "goalpost"
+    ],
+    "db": {
+      "player_tracking_rows": 2225,
+      "frames_rows": 28,
+      "events": 0,
+      "player_metrics": 531,
+      "team_metrics": 10,
+      "calibration_status_rows": 1
+    },
+    "event_types": {},
+    "team_metrics_by_team": {
+      "team-away": {
+        "formation": {
+          "value": null,
+          "confidence": "low_sample",
+          "method": "heuristic_proxy"
+        },
+        "compactness_score": {
+          "value": null,
+          "confidence": "low_sample",
+          "method": "deterministic"
+        },
+        "formation_stability_score": {
+          "value": null,
+          "confidence": "low_sample",
+          "method": "deterministic"
+        },
+        "weak_zone_map": {
+          "value": null,
+          "confidence": "low_sample",
+          "method": "heuristic_proxy"
+        },
+        "pressing_intensity_score": {
+          "value": null,
+          "confidence": "low_sample",
+          "method": "heuristic_proxy"
+        }
+      },
+      "team-home": {
+        "formation": {
+          "value": null,
+          "confidence": "low_sample",
+          "method": "heuristic_proxy"
+        },
+        "compactness_score": {
+          "value": null,
+          "confidence": "low_sample",
+          "method": "deterministic"
+        },
+        "formation_stability_score": {
+          "value": null,
+          "confidence": "low_sample",
+          "method": "deterministic"
+        },
+        "weak_zone_map": {
+          "value": null,
+          "confidence": "low_sample",
+          "method": "heuristic_proxy"
+        },
+        "pressing_intensity_score": {
+          "value": null,
+          "confidence": "low_sample",
+          "method": "heuristic_proxy"
+        }
+      }
+    },
+    "calibration_invalid_reasons": [
+      "no pitch keypoints above the visibility floor"
+    ],
+    "calibration_valid_episodes": 0,
+    "honesty_contract_violations": [],
+    "stage_timings_s": {
+      "detection_tracking": 9.6645,
+      "team_assignment": 0.3101,
+      "frame_synchronisation": 29.4104,
+      "calibration_history": 0.0034,
+      "pitch_trajectory": 0.0023,
+      "role_inference": 0.0001,
+      "attacking_direction": 0.0001,
+      "pose_estimation": 20.3843,
+      "db_write_tracking": 0.1797,
+      "event_heuristics": 0.0006,
+      "team_scoring": 0.0031,
+      "player_scoring": 0.0186
+    },
+    "total_pipeline_seconds": 59.9772,
+    "simulation": {
+      "teams_available": [
+        "team-away",
+        "team-home"
+      ],
+      "interventions": [
+        "team team-away compactness +10.0%"
+      ],
+      "is_reinforcement_learning": false,
+      "n_metrics": 3,
+      "metrics": [
+        {
+          "metric_name": "compactness_score",
+          "team_id": "team-away",
+          "baseline_value": null,
+          "simulated_value": null,
+          "delta": null,
+          "confidence": "low_upstream_confidence",
+          "method": "heuristic_proxy",
+          "recomputed_by": "ai.team_intelligence.formation_stability.team_shape.compute_compactness"
+        },
+        {
+          "metric_name": "formation",
+          "team_id": "team-away",
+          "baseline_value": null,
+          "simulated_value": null,
+          "delta": null,
+          "confidence": "low_upstream_confidence",
+          "method": "heuristic_proxy",
+          "recomputed_by": "ai.computer_vision.tactical_analysis.formation_detection.detect_formation"
+        },
+        {
+          "metric_name": "weak_zone_map",
+          "team_id": "team-away",
+          "baseline_value": null,
+          "simulated_value": null,
+          "delta": null,
+          "confidence": "low_upstream_confidence",
+          "method": "heuristic_proxy",
+          "recomputed_by": "ai.team_intelligence.weak_zone_detection.weak_zones.compute_weak_zones"
+        }
+      ],
+      "unavailable": [
+        "compactness_score for team team-away: baseline is unavailable (low_sample), so no simulated value is reported",
+        "formation for team team-away: baseline is unavailable (low_sample), so no simulated value is reported",
+        "weak_zone_map for team team-away: baseline is unavailable (low_sample), so no simulated value is reported"
+      ]
+    }
+  }
+]

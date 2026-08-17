@@ -1,0 +1,77 @@
+{
+  "model": "field",
+  "task": "segment",
+  "dataset": "field",
+  "data_yaml": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\_data\\field.data.yaml",
+  "weights": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\models\\yolo\\field_v1\\weights\\best.pt",
+  "metrics_file": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\models\\yolo\\field_v1\\metrics.json",
+  "metrics": {
+    "split": "test",
+    "raw": {
+      "metrics/precision(B)": 1.0,
+      "metrics/recall(B)": 1.0,
+      "metrics/mAP50(B)": 0.995,
+      "metrics/mAP50-95(B)": 0.9949999999999999,
+      "metrics/precision(M)": 1.0,
+      "metrics/recall(M)": 1.0,
+      "metrics/mAP50(M)": 0.995,
+      "metrics/mAP50-95(M)": 0.9949999999999999,
+      "fitness": 1.9899999999999998
+    },
+    "box": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "map50": 0.995,
+      "map50_95": 0.9949999999999999
+    },
+    "per_class": {
+      "pitch": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "map50": 0.995,
+        "map50_95": 0.9949999999999999
+      }
+    },
+    "mask": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "map50": 0.995,
+      "map50_95": 0.9949999999999999
+    },
+    "confusion_matrix_png": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\train\\field_v1_val_test\\confusion_matrix.png",
+    "save_dir": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\train\\field_v1_val_test"
+  },
+  "started_at": "2026-08-12T17:01:13.807112+00:00",
+  "finished_at": "2026-08-12T17:15:47.513301+00:00",
+  "train_args": {
+    "device": "0",
+    "workers": "8",
+    "seed": "0",
+    "patience": "25",
+    "optimizer": "auto",
+    "val": "True",
+    "plots": "True",
+    "exist_ok": "False",
+    "epochs": "80",
+    "imgsz": "640",
+    "batch": "12",
+    "mosaic": "0.0",
+    "scale": "0.4",
+    "degrees": "0.0",
+    "fliplr": "0.5",
+    "data": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\_data\\field.data.yaml",
+    "project": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\train",
+    "name": "field_v1",
+    "resume": "False"
+  },
+  "environment": {
+    "python": "3.11.0",
+    "platform": "Windows-10-10.0.28000-SP0",
+    "git_sha": "2838b6f",
+    "torch": "2.11.0+cu128",
+    "cuda_available": true,
+    "gpu": "NVIDIA GeForce RTX 5070 Ti Laptop GPU",
+    "vram_total_gb": 11.94,
+    "ultralytics": "8.4.98"
+  }
+}

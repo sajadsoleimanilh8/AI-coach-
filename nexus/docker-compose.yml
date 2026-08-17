@@ -1,0 +1,28 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nexus-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+
+  nexus:
+    build:
+      context: ..
+      dockerfile: nexus/Dockerfile
+    container_name: nexus-api
+    depends_on:
+      - ollama
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+    ports:
+      - "8100:8100"
+    volumes:
+      - nexus_data:/app/nexus/data
+    restart: unless-stopped
+
+volumes:
+  ollama_models:
+  nexus_data:

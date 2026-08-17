@@ -1,0 +1,72 @@
+{
+  "model": "ball",
+  "task": "detect",
+  "dataset": "ball",
+  "data_yaml": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\_data\\ball.data.yaml",
+  "weights": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\models\\yolo\\ball_v1\\weights\\best.pt",
+  "metrics_file": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\models\\yolo\\ball_v1\\metrics.json",
+  "metrics": {
+    "split": "test",
+    "raw": {
+      "metrics/precision(B)": 0.8937673142113586,
+      "metrics/recall(B)": 0.8422818791946308,
+      "metrics/mAP50(B)": 0.9156521429328919,
+      "metrics/mAP50-95(B)": 0.6430260922406525,
+      "fitness": 0.6430260922406525
+    },
+    "box": {
+      "precision": 0.8937673142113586,
+      "recall": 0.8422818791946308,
+      "map50": 0.9156521429328919,
+      "map50_95": 0.6430260922406525
+    },
+    "per_class": {
+      "ball": {
+        "precision": 0.8937673142113586,
+        "recall": 0.8422818791946308,
+        "map50": 0.9156521429328919,
+        "map50_95": 0.6430260922406525
+      }
+    },
+    "confusion_matrix_png": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\train\\ball_v1_val_test\\confusion_matrix.png",
+    "save_dir": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\train\\ball_v1_val_test"
+  },
+  "started_at": "2026-08-12T11:01:50.835615+00:00",
+  "finished_at": "2026-08-12T12:15:03.850831+00:00",
+  "train_args": {
+    "device": "0",
+    "workers": "8",
+    "seed": "0",
+    "patience": "25",
+    "optimizer": "auto",
+    "val": "True",
+    "plots": "True",
+    "exist_ok": "False",
+    "epochs": "150",
+    "imgsz": "1280",
+    "batch": "6",
+    "mosaic": "1.0",
+    "close_mosaic": "15",
+    "scale": "0.25",
+    "degrees": "0.0",
+    "fliplr": "0.5",
+    "mixup": "0.0",
+    "hsv_h": "0.015",
+    "hsv_s": "0.5",
+    "hsv_v": "0.5",
+    "data": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\_data\\ball.data.yaml",
+    "project": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\train",
+    "name": "ball_v1",
+    "resume": "False"
+  },
+  "environment": {
+    "python": "3.11.0",
+    "platform": "Windows-10-10.0.28000-SP0",
+    "git_sha": "2838b6f",
+    "torch": "2.11.0+cu128",
+    "cuda_available": true,
+    "gpu": "NVIDIA GeForce RTX 5070 Ti Laptop GPU",
+    "vram_total_gb": 11.94,
+    "ultralytics": "8.4.98"
+  }
+}

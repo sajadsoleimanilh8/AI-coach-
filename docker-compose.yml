@@ -1,0 +1,76 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: sports_strategy_backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://sports:sports@postgres:5432/sports_strategy
+      REDIS_URL: redis://redis:6379/0
+      SSC_MODEL_ROOT: /app/models
+    volumes:
+      - ./storage:/app/storage
+      - ./models:/app/models:ro
+      - ./models/yolo/player_v1/weights/best.pt:/app/models/yolo/player_v1/weights/best.pt:ro
+      - ./models/yolo/ball_v1/weights/best.pt:/app/models/yolo/ball_v1/weights/best.pt:ro
+      - ./models/yolo/field_v1/weights/best.pt:/app/models/yolo/field_v1/weights/best.pt:ro
+      - ./models/yolo/calibration_v1/weights/best.pt:/app/models/yolo/calibration_v1/weights/best.pt:ro
+      - ./models/yolo/goalpost_v1/weights/best.pt:/app/models/yolo/goalpost_v1/weights/best.pt:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  redis:
+    image: redis:7-alpine
+    container_name: sports_strategy_redis
+    ports:
+      - "6379:6379"
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: sports_strategy_celery_worker
+    command: celery -A backend.celery_app worker --loglevel=info
+    environment:
+      DATABASE_URL: postgresql+psycopg2://sports:sports@postgres:5432/sports_strategy
+      REDIS_URL: redis://redis:6379/0
+      SSC_MODEL_ROOT: /app/models
+    volumes:
+      - ./storage:/app/storage
+      - ./calibrations:/app/calibrations
+      - ./models:/app/models:ro
+      - ./models/yolo/player_v1/weights/best.pt:/app/models/yolo/player_v1/weights/best.pt:ro
+      - ./models/yolo/ball_v1/weights/best.pt:/app/models/yolo/ball_v1/weights/best.pt:ro
+      - ./models/yolo/field_v1/weights/best.pt:/app/models/yolo/field_v1/weights/best.pt:ro
+      - ./models/yolo/calibration_v1/weights/best.pt:/app/models/yolo/calibration_v1/weights/best.pt:ro
+      - ./models/yolo/goalpost_v1/weights/best.pt:/app/models/yolo/goalpost_v1/weights/best.pt:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: sports_strategy_postgres
+    environment:
+      POSTGRES_DB: sports_strategy
+      POSTGRES_USER: sports
+      POSTGRES_PASSWORD: sports
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sports -d sports_strategy"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:

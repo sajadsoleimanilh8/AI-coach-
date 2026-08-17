@@ -1,0 +1,14 @@
+{
+  "calibration_valid": false,
+  "calibration_confidence": 0.0,
+  "calibration_metric_method": "deterministic",
+  "calibration_metric_confidence": "low_upstream_confidence",
+  "invalid_reason": "no pitch keypoints above the visibility floor",
+  "keypoint_detection_method": "ml_trained",
+  "keypoint_detection_confidence": null,
+  "n_keypoints": 0,
+  "field_detected": true,
+  "field_detection_confidence": 0.9290636777877808,
+  "projected_players": [],
+  "projection_suppressed": true
+}

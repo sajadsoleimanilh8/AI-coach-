@@ -1,0 +1,7 @@
+ultralytics
+opencv-python-headless
+mediapipe
+scipy
+numpy
+
+-r ../../backend/requirements.txt

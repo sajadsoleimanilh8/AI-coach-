@@ -1,0 +1,808 @@
+{
+  "images": 317,
+  "rare_threshold": 30,
+  "clips": {
+    "pattern": "^([0-9a-fA-F]+)_",
+    "distinct_clips": 18,
+    "images_per_clip": {
+      "08fd33": 36,
+      "0a2d9b": 13,
+      "0bfacc": 13,
+      "121364": 43,
+      "2e57b9": 32,
+      "42ba34": 77,
+      "4b770a": 2,
+      "538438": 2,
+      "54745b": 6,
+      "55c9d1": 3,
+      "744b27": 7,
+      "798b45": 5,
+      "a9f16c": 11,
+      "c01561": 3,
+      "cd987c": 8,
+      "d82e7a": 29,
+      "e624c9": 10,
+      "ec783a": 17
+    },
+    "clip_size_min": 2,
+    "clip_size_max": 77,
+    "clips_spanning_registry_splits": 17
+  },
+  "existing_bucket_supply": {
+    "near_corner_left": {
+      "images_available": 27,
+      "clips_supplying": 10,
+      "max_from_one_clip": 7
+    },
+    "near_corner_right": {
+      "images_available": 11,
+      "clips_supplying": 4,
+      "max_from_one_clip": 7
+    },
+    "mirror_stress": {
+      "images_available": 31,
+      "clips_supplying": 9,
+      "max_from_one_clip": 9
+    },
+    "end_asymmetric": {
+      "images_available": 167,
+      "clips_supplying": 18,
+      "max_from_one_clip": 27
+    }
+  },
+  "per_clip_bucket_counts": {
+    "08fd33": {
+      "end_asymmetric": 18,
+      "near_corner_left": 2,
+      "mirror_stress": 3
+    },
+    "0a2d9b": {
+      "end_asymmetric": 8,
+      "near_corner_right": 2,
+      "near_corner_left": 2,
+      "mirror_stress": 1
+    },
+    "0bfacc": {
+      "end_asymmetric": 6
+    },
+    "121364": {
+      "mirror_stress": 5,
+      "end_asymmetric": 27,
+      "near_corner_left": 7
+    },
+    "2e57b9": {
+      "end_asymmetric": 12,
+      "mirror_stress": 9,
+      "near_corner_right": 1
+    },
+    "42ba34": {
+      "end_asymmetric": 26,
+      "mirror_stress": 9,
+      "near_corner_left": 2,
+      "near_corner_right": 1
+    },
+    "4b770a": {
+      "end_asymmetric": 1
+    },
+    "538438": {
+      "end_asymmetric": 2
+    },
+    "54745b": {
+      "end_asymmetric": 2
+    },
+    "55c9d1": {
+      "end_asymmetric": 1
+    },
+    "744b27": {
+      "end_asymmetric": 6,
+      "near_corner_left": 3
+    },
+    "798b45": {
+      "end_asymmetric": 3,
+      "near_corner_left": 2
+    },
+    "a9f16c": {
+      "end_asymmetric": 11,
+      "near_corner_left": 2
+    },
+    "c01561": {
+      "end_asymmetric": 2,
+      "near_corner_left": 1
+    },
+    "cd987c": {
+      "end_asymmetric": 5,
+      "mirror_stress": 1
+    },
+    "d82e7a": {
+      "end_asymmetric": 22,
+      "near_corner_right": 7,
+      "near_corner_left": 5,
+      "mirror_stress": 1
+    },
+    "e624c9": {
+      "end_asymmetric": 4,
+      "mirror_stress": 1
+    },
+    "ec783a": {
+      "mirror_stress": 1,
+      "end_asymmetric": 11,
+      "near_corner_left": 1
+    }
+  },
+  "mirror_ambiguity": {
+    "note": "share of visible landmarks that map onto another VISIBLE landmark under FLIP_IDX; 1.0 means the mirrored pitch explains the same point set",
+    "bands": {
+      "0.50-0.75_moderate": 41,
+      "0.75-0.99_high": 32,
+      "1.00_fully_flip_ambiguous": 11,
+      "0.01-0.50_low": 209,
+      "0.00_unambiguous": 24
+    },
+    "mean_symmetry_by_framing": {
+      "both_ends_wide": 0.7461,
+      "centre_only": 1.0,
+      "left_end_only": 0.287,
+      "right_end_only": 0.3275
+    },
+    "images_at_or_above_0.75": 43
+  },
+  "rare_indices": [
+    5,
+    29
+  ],
+  "index_detail": {
+    "0": {
+      "name": "left_corner_far",
+      "pitch_xy": [
+        0.0,
+        0.0
+      ],
+      "visible_in": 161,
+      "region": "left_end",
+      "side": "far",
+      "region_in_frame_images": 187,
+      "visible_given_region_in_frame": 161,
+      "conditional_rate": 0.861,
+      "flip_partner": 24,
+      "flip_partner_visible_in": 156
+    },
+    "1": {
+      "name": "left_goalline_penalty_top",
+      "pitch_xy": [
+        0.0,
+        13.84
+      ],
+      "visible_in": 146,
+      "region": "left_end",
+      "side": "far",
+      "region_in_frame_images": 187,
+      "visible_given_region_in_frame": 146,
+      "conditional_rate": 0.7807,
+      "flip_partner": 25,
+      "flip_partner_visible_in": 135
+    },
+    "2": {
+      "name": "left_goalline_goalarea_top",
+      "pitch_xy": [
+        0.0,
+        24.84
+      ],
+      "visible_in": 131,
+      "region": "left_end",
+      "side": "middle",
+      "region_in_frame_images": 187,
+      "visible_given_region_in_frame": 131,
+      "conditional_rate": 0.7005,
+      "flip_partner": 26,
+      "flip_partner_visible_in": 119
+    },
+    "3": {
+      "name": "left_goalline_goalarea_bottom",
+      "pitch_xy": [
+        0.0,
+        43.16
+      ],
+      "visible_in": 111,
+      "region": "left_end",
+      "side": "middle",
+      "region_in_frame_images": 187,
+      "visible_given_region_in_frame": 111,
+      "conditional_rate": 0.5936,
+      "flip_partner": 27,
+      "flip_partner_visible_in": 78
+    },
+    "4": {
+      "name": "left_goalline_penalty_bottom",
+      "pitch_xy": [
+        0.0,
+        54.16
+      ],
+      "visible_in": 73,
+      "region": "left_end",
+      "side": "near",
+      "region_in_frame_images": 187,
+      "visible_given_region_in_frame": 73,
+      "conditional_rate": 0.3904,
+      "flip_partner": 28,
+      "flip_partner_visible_in": 48
+    },
+    "5": {
+      "name": "left_corner_near",
+      "pitch_xy": [
+        0.0,
+        68.0
+      ],
+      "visible_in": 27,
+      "region": "left_end",
+      "side": "near",
+      "region_in_frame_images": 187,
+      "visible_given_region_in_frame": 27,
+      "conditional_rate": 0.1444,
+      "flip_partner": 29,
+      "flip_partner_visible_in": 11
+    },
+    "6": {
+      "name": "left_goalarea_top_inner",
+      "pitch_xy": [
+        5.5,
+        24.84
+      ],
+      "visible_in": 145,
+      "region": "left_end",
+      "side": "middle",
+      "region_in_frame_images": 187,
+      "visible_given_region_in_frame": 145,
+      "conditional_rate": 0.7754,
+      "flip_partner": 22,
+      "flip_partner_visible_in": 131
+    },
+    "7": {
+      "name": "left_goalarea_bottom_inner",
+      "pitch_xy": [
+        5.5,
+        43.16
+      ],
+      "visible_in": 117,
+      "region": "left_end",
+      "side": "middle",
+      "region_in_frame_images": 187,
+      "visible_given_region_in_frame": 117,
+      "conditional_rate": 0.6257,
+      "flip_partner": 23,
+      "flip_partner_visible_in": 97
+    },
+    "8": {
+      "name": "left_penalty_spot",
+      "pitch_xy": [
+        11.0,
+        34.0
+      ],
+      "visible_in": 146,
+      "region": "left_end",
+      "side": "middle",
+      "region_in_frame_images": 187,
+      "visible_given_region_in_frame": 146,
+      "conditional_rate": 0.7807,
+      "flip_partner": 21,
+      "flip_partner_visible_in": 128
+    },
+    "9": {
+      "name": "left_penaltyarea_top_inner",
+      "pitch_xy": [
+        16.5,
+        13.84
+      ],
+      "visible_in": 186,
+      "region": "left_end",
+      "side": "far",
+      "region_in_frame_images": 187,
+      "visible_given_region_in_frame": 186,
+      "conditional_rate": 0.9947,
+      "flip_partner": 17,
+      "flip_partner_visible_in": 188
+    },
+    "10": {
+      "name": "left_penalty_arc_top",
+      "pitch_xy": [
+        16.5,
+        26.687510683768487
+      ],
+      "visible_in": 171,
+      "region": "left_end",
+      "side": "middle",
+      "region_in_frame_images": 187,
+      "visible_given_region_in_frame": 171,
+      "conditional_rate": 0.9144,
+      "flip_partner": 18,
+      "flip_partner_visible_in": 170
+    },
+    "11": {
+      "name": "left_penalty_arc_bottom",
+      "pitch_xy": [
+        16.5,
+        41.31248931623151
+      ],
+      "visible_in": 149,
+      "region": "left_end",
+      "side": "middle",
+      "region_in_frame_images": 187,
+      "visible_given_region_in_frame": 149,
+      "conditional_rate": 0.7968,
+      "flip_partner": 19,
+      "flip_partner_visible_in": 137
+    },
+    "12": {
+      "name": "left_penaltyarea_bottom_inner",
+      "pitch_xy": [
+        16.5,
+        54.16
+      ],
+      "visible_in": 123,
+      "region": "left_end",
+      "side": "near",
+      "region_in_frame_images": 187,
+      "visible_given_region_in_frame": 123,
+      "conditional_rate": 0.6578,
+      "flip_partner": 20,
+      "flip_partner_visible_in": 104
+    },
+    "13": {
+      "name": "halfway_far",
+      "pitch_xy": [
+        52.5,
+        0.0
+      ],
+      "visible_in": 285,
+      "region": "centre",
+      "side": "far",
+      "region_in_frame_images": 314,
+      "visible_given_region_in_frame": 285,
+      "conditional_rate": 0.9076,
+      "flip_partner": 13,
+      "flip_partner_visible_in": 285
+    },
+    "14": {
+      "name": "centre_circle_top",
+      "pitch_xy": [
+        52.5,
+        24.85
+      ],
+      "visible_in": 287,
+      "region": "centre",
+      "side": "middle",
+      "region_in_frame_images": 314,
+      "visible_given_region_in_frame": 287,
+      "conditional_rate": 0.914,
+      "flip_partner": 14,
+      "flip_partner_visible_in": 287
+    },
+    "15": {
+      "name": "centre_circle_bottom",
+      "pitch_xy": [
+        52.5,
+        43.15
+      ],
+      "visible_in": 290,
+      "region": "centre",
+      "side": "middle",
+      "region_in_frame_images": 314,
+      "visible_given_region_in_frame": 290,
+      "conditional_rate": 0.9236,
+      "flip_partner": 15,
+      "flip_partner_visible_in": 290
+    },
+    "16": {
+      "name": "halfway_near",
+      "pitch_xy": [
+        52.5,
+        68.0
+      ],
+      "visible_in": 234,
+      "region": "centre",
+      "side": "near",
+      "region_in_frame_images": 314,
+      "visible_given_region_in_frame": 234,
+      "conditional_rate": 0.7452,
+      "flip_partner": 16,
+      "flip_partner_visible_in": 234
+    },
+    "17": {
+      "name": "right_penaltyarea_top_inner",
+      "pitch_xy": [
+        88.5,
+        13.84
+      ],
+      "visible_in": 188,
+      "region": "right_end",
+      "side": "far",
+      "region_in_frame_images": 188,
+      "visible_given_region_in_frame": 188,
+      "conditional_rate": 1.0,
+      "flip_partner": 9,
+      "flip_partner_visible_in": 186
+    },
+    "18": {
+      "name": "right_penalty_arc_top",
+      "pitch_xy": [
+        88.5,
+        26.687510683768487
+      ],
+      "visible_in": 170,
+      "region": "right_end",
+      "side": "middle",
+      "region_in_frame_images": 188,
+      "visible_given_region_in_frame": 170,
+      "conditional_rate": 0.9043,
+      "flip_partner": 10,
+      "flip_partner_visible_in": 171
+    },
+    "19": {
+      "name": "right_penalty_arc_bottom",
+      "pitch_xy": [
+        88.5,
+        41.31248931623151
+      ],
+      "visible_in": 137,
+      "region": "right_end",
+      "side": "middle",
+      "region_in_frame_images": 188,
+      "visible_given_region_in_frame": 137,
+      "conditional_rate": 0.7287,
+      "flip_partner": 11,
+      "flip_partner_visible_in": 149
+    },
+    "20": {
+      "name": "right_penaltyarea_bottom_inner",
+      "pitch_xy": [
+        88.5,
+        54.16
+      ],
+      "visible_in": 104,
+      "region": "right_end",
+      "side": "near",
+      "region_in_frame_images": 188,
+      "visible_given_region_in_frame": 104,
+      "conditional_rate": 0.5532,
+      "flip_partner": 12,
+      "flip_partner_visible_in": 123
+    },
+    "21": {
+      "name": "right_penalty_spot",
+      "pitch_xy": [
+        94.0,
+        34.0
+      ],
+      "visible_in": 128,
+      "region": "right_end",
+      "side": "middle",
+      "region_in_frame_images": 188,
+      "visible_given_region_in_frame": 128,
+      "conditional_rate": 0.6809,
+      "flip_partner": 8,
+      "flip_partner_visible_in": 146
+    },
+    "22": {
+      "name": "right_goalarea_top_inner",
+      "pitch_xy": [
+        99.5,
+        24.84
+      ],
+      "visible_in": 131,
+      "region": "right_end",
+      "side": "middle",
+      "region_in_frame_images": 188,
+      "visible_given_region_in_frame": 131,
+      "conditional_rate": 0.6968,
+      "flip_partner": 6,
+      "flip_partner_visible_in": 145
+    },
+    "23": {
+      "name": "right_goalarea_bottom_inner",
+      "pitch_xy": [
+        99.5,
+        43.16
+      ],
+      "visible_in": 97,
+      "region": "right_end",
+      "side": "middle",
+      "region_in_frame_images": 188,
+      "visible_given_region_in_frame": 97,
+      "conditional_rate": 0.516,
+      "flip_partner": 7,
+      "flip_partner_visible_in": 117
+    },
+    "24": {
+      "name": "right_corner_far",
+      "pitch_xy": [
+        105.0,
+        0.0
+      ],
+      "visible_in": 156,
+      "region": "right_end",
+      "side": "far",
+      "region_in_frame_images": 188,
+      "visible_given_region_in_frame": 156,
+      "conditional_rate": 0.8298,
+      "flip_partner": 0,
+      "flip_partner_visible_in": 161
+    },
+    "25": {
+      "name": "right_goalline_penalty_top",
+      "pitch_xy": [
+        105.0,
+        13.84
+      ],
+      "visible_in": 135,
+      "region": "right_end",
+      "side": "far",
+      "region_in_frame_images": 188,
+      "visible_given_region_in_frame": 135,
+      "conditional_rate": 0.7181,
+      "flip_partner": 1,
+      "flip_partner_visible_in": 146
+    },
+    "26": {
+      "name": "right_goalline_goalarea_top",
+      "pitch_xy": [
+        105.0,
+        24.84
+      ],
+      "visible_in": 119,
+      "region": "right_end",
+      "side": "middle",
+      "region_in_frame_images": 188,
+      "visible_given_region_in_frame": 119,
+      "conditional_rate": 0.633,
+      "flip_partner": 2,
+      "flip_partner_visible_in": 131
+    },
+    "27": {
+      "name": "right_goalline_goalarea_bottom",
+      "pitch_xy": [
+        105.0,
+        43.16
+      ],
+      "visible_in": 78,
+      "region": "right_end",
+      "side": "middle",
+      "region_in_frame_images": 188,
+      "visible_given_region_in_frame": 78,
+      "conditional_rate": 0.4149,
+      "flip_partner": 3,
+      "flip_partner_visible_in": 111
+    },
+    "28": {
+      "name": "right_goalline_penalty_bottom",
+      "pitch_xy": [
+        105.0,
+        54.16
+      ],
+      "visible_in": 48,
+      "region": "right_end",
+      "side": "near",
+      "region_in_frame_images": 188,
+      "visible_given_region_in_frame": 48,
+      "conditional_rate": 0.2553,
+      "flip_partner": 4,
+      "flip_partner_visible_in": 73
+    },
+    "29": {
+      "name": "right_corner_near",
+      "pitch_xy": [
+        105.0,
+        68.0
+      ],
+      "visible_in": 11,
+      "region": "right_end",
+      "side": "near",
+      "region_in_frame_images": 188,
+      "visible_given_region_in_frame": 11,
+      "conditional_rate": 0.0585,
+      "flip_partner": 5,
+      "flip_partner_visible_in": 27
+    },
+    "30": {
+      "name": "centre_circle_left",
+      "pitch_xy": [
+        43.35,
+        34.0
+      ],
+      "visible_in": 262,
+      "region": "centre",
+      "side": "middle",
+      "region_in_frame_images": 314,
+      "visible_given_region_in_frame": 262,
+      "conditional_rate": 0.8344,
+      "flip_partner": 31,
+      "flip_partner_visible_in": 256
+    },
+    "31": {
+      "name": "centre_circle_right",
+      "pitch_xy": [
+        61.65,
+        34.0
+      ],
+      "visible_in": 256,
+      "region": "centre",
+      "side": "middle",
+      "region_in_frame_images": 314,
+      "visible_given_region_in_frame": 256,
+      "conditional_rate": 0.8153,
+      "flip_partner": 30,
+      "flip_partner_visible_in": 262
+    }
+  },
+  "framing_distribution": {
+    "left_end_only": 127,
+    "right_end_only": 128,
+    "centre_only": 2,
+    "both_ends_wide": 60
+  },
+  "end_and_side_totals": {
+    "left_end_in_frame": 187,
+    "right_end_in_frame": 188,
+    "centre_in_frame": 314,
+    "near_side_any": 302,
+    "far_side_any": 317
+  },
+  "near_far_matched_pairs": [
+    {
+      "far_index": 0,
+      "far_name": "left_corner_far",
+      "far_visible_in": 161,
+      "near_index": 5,
+      "near_name": "left_corner_near",
+      "near_visible_in": 27,
+      "ratio_far_over_near": 5.96
+    },
+    {
+      "far_index": 24,
+      "far_name": "right_corner_far",
+      "far_visible_in": 156,
+      "near_index": 29,
+      "near_name": "right_corner_near",
+      "near_visible_in": 11,
+      "ratio_far_over_near": 14.18
+    },
+    {
+      "far_index": 13,
+      "far_name": "halfway_far",
+      "far_visible_in": 285,
+      "near_index": 16,
+      "near_name": "halfway_near",
+      "near_visible_in": 234,
+      "ratio_far_over_near": 1.22
+    }
+  ],
+  "rare_cooccurrence": {
+    "5": {
+      "name": "left_corner_near",
+      "n_images": 27,
+      "top_cooccurring": [
+        {
+          "index": 0,
+          "name": "left_corner_far",
+          "n": 27,
+          "rate": 1.0
+        },
+        {
+          "index": 1,
+          "name": "left_goalline_penalty_top",
+          "n": 27,
+          "rate": 1.0
+        },
+        {
+          "index": 2,
+          "name": "left_goalline_goalarea_top",
+          "n": 27,
+          "rate": 1.0
+        },
+        {
+          "index": 3,
+          "name": "left_goalline_goalarea_bottom",
+          "n": 27,
+          "rate": 1.0
+        },
+        {
+          "index": 4,
+          "name": "left_goalline_penalty_bottom",
+          "n": 27,
+          "rate": 1.0
+        },
+        {
+          "index": 6,
+          "name": "left_goalarea_top_inner",
+          "n": 27,
+          "rate": 1.0
+        },
+        {
+          "index": 7,
+          "name": "left_goalarea_bottom_inner",
+          "n": 27,
+          "rate": 1.0
+        },
+        {
+          "index": 8,
+          "name": "left_penalty_spot",
+          "n": 27,
+          "rate": 1.0
+        }
+      ],
+      "median_visible_count": 18
+    },
+    "29": {
+      "name": "right_corner_near",
+      "n_images": 11,
+      "top_cooccurring": [
+        {
+          "index": 13,
+          "name": "halfway_far",
+          "n": 11,
+          "rate": 1.0
+        },
+        {
+          "index": 14,
+          "name": "centre_circle_top",
+          "n": 11,
+          "rate": 1.0
+        },
+        {
+          "index": 15,
+          "name": "centre_circle_bottom",
+          "n": 11,
+          "rate": 1.0
+        },
+        {
+          "index": 17,
+          "name": "right_penaltyarea_top_inner",
+          "n": 11,
+          "rate": 1.0
+        },
+        {
+          "index": 18,
+          "name": "right_penalty_arc_top",
+          "n": 11,
+          "rate": 1.0
+        },
+        {
+          "index": 19,
+          "name": "right_penalty_arc_bottom",
+          "n": 11,
+          "rate": 1.0
+        },
+        {
+          "index": 20,
+          "name": "right_penaltyarea_bottom_inner",
+          "n": 11,
+          "rate": 1.0
+        },
+        {
+          "index": 21,
+          "name": "right_penalty_spot",
+          "n": 11,
+          "rate": 1.0
+        }
+      ],
+      "median_visible_count": 18
+    }
+  },
+  "visible_count_distribution": {
+    "6": 3,
+    "7": 5,
+    "8": 11,
+    "9": 17,
+    "10": 6,
+    "11": 7,
+    "12": 15,
+    "13": 18,
+    "14": 20,
+    "15": 24,
+    "16": 50,
+    "17": 59,
+    "18": 62,
+    "19": 12,
+    "20": 1,
+    "21": 4,
+    "22": 3
+  }
+}

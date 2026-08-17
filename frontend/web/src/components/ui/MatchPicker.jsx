@@ -1,0 +1,116 @@
+import { useMemo } from 'react';
+
+import api from '../../api/client.js';
+import { useAction, useAsync } from '../../hooks/useAsync.js';
+import { EmptyState, ErrorState, LoadingState } from './States.jsx';
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
+export function SelectMatchState({ onGoToUpload, onAttachMatch }) {
+                                                                              
+                                                                       
+  if (!onAttachMatch) {
+    return (
+      <EmptyState
+        title="Select a Match First"
+        message="This view is scoped to a single match. Upload a clip in Match Analysis — the match ID it returns is shared with every tab from that point on."
+        action={
+          onGoToUpload ? (
+            <button type="button" className="btn-primary" onClick={onGoToUpload}>
+              Go to Match Analysis
+            </button>
+          ) : null
+        }
+      />
+    );
+  }
+  return <MatchPicker onGoToUpload={onGoToUpload} onAttachMatch={onAttachMatch} />;
+}
+
+export default function MatchPicker({ onGoToUpload, onAttachMatch }) {
+  const matches = useAsync((signal) => api.listMatches(signal), []);
+  const attach = useAction((matchId, signal) => api.getMatchSummary(matchId, signal));
+
+  const rows = useMemo(
+    () => (Array.isArray(matches.data) ? matches.data : []),
+    [matches.data],
+  );
+
+  const choose = async (matchId) => {
+    const summary = await attach.run(matchId);
+    if (summary) onAttachMatch?.(summary);
+  };
+
+  return (
+    <div className="dash-state dash-state-empty dash-match-picker">
+      <div className="dash-state-label is-empty">Select a Match First</div>
+      <p className="dash-state-message">
+        This view is scoped to a single match. Pick one that has already been processed, or
+        upload a new clip in Match Analysis.
+      </p>
+
+      {matches.status === 'loading' ? (
+        <LoadingState label="Reading matches" rows={2} />
+      ) : null}
+
+      {matches.status === 'error' ? (
+        <ErrorState error={matches.error} onRetry={matches.reload} />
+      ) : null}
+
+      {matches.status === 'success' && rows.length === 0 ? (
+        <EmptyState
+          title="No Matches Yet"
+          message="The database holds no matches. Upload a clip in Match Analysis to create the first one."
+        />
+      ) : null}
+
+      {matches.status === 'success' && rows.length > 0 ? (
+        <ul className="dash-match-list">
+          {rows.map((row) => {
+            const usable = row.tracking_rows > 0;
+            return (
+              <li key={row.match_id} className="dash-match-row">
+                <button
+                  type="button"
+                  className="dash-match-option"
+                  onClick={() => choose(row.match_id)}
+                  disabled={attach.status === 'loading'}
+                >
+                  <span className="dash-match-option-head">
+                    <code>{row.match_id}</code>
+                    <span className={`dash-match-flag ${usable ? 'is-good' : 'is-warn'}`}>
+                      {usable
+                        ? `${row.tracking_rows.toLocaleString()} tracking rows`
+                        : 'no tracking rows'}
+                    </span>
+                  </span>
+                  <span className="dash-match-option-meta">
+                    {row.video_filename || 'no video file'}
+                    {' · '}
+                    {row.job_status || 'never processed'}
+                    {row.created_at ? ` · ${new Date(row.created_at).toLocaleString()}` : ''}
+                    {row.video_file_exists ? '' : ' · clip missing from disk'}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+
+      {attach.status === 'error' ? (
+        <div className="dash-inline-error" role="alert">
+          <span className="dash-inline-error-key">Could not attach</span>
+          {attach.error?.message}
+        </div>
+      ) : null}
+
+      {onGoToUpload ? (
+        <div className="dash-state-action">
+          <button type="button" className="btn-ghost" onClick={onGoToUpload}>
+            Upload a new clip instead
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}

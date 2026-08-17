@@ -1,0 +1,145 @@
+model_root_default: "models"
+runs_root_default: "runs/train"
+
+defaults:
+  device: 0
+  workers: 8
+  seed: 0
+  patience: 25
+  optimizer: auto
+  val: true
+  plots: true
+  exist_ok: false
+
+models:
+
+  player:
+    task: detect
+    dataset: player
+    base_weights: yolov8s.pt
+    checkpoint: yolo/player_v1/weights/best.pt
+    metrics_file: yolo/player_v1/metrics.json
+    run_name: player_v1
+    classes:
+      0: player
+    role_inference: heuristic_proxy
+    train:
+      epochs: 100
+      imgsz: 960
+      batch: 12
+      mosaic: 1.0
+      close_mosaic: 10
+      scale: 0.5
+      degrees: 0.0
+      fliplr: 0.5
+      mixup: 0.0
+      hsv_h: 0.015
+      hsv_s: 0.7
+      hsv_v: 0.4
+    inference:
+      imgsz: 960
+      conf: 0.25
+      iou: 0.5
+      max_det: 40
+
+  ball:
+    task: detect
+    dataset: ball
+    base_weights: yolov8s.pt
+    checkpoint: yolo/ball_v1/weights/best.pt
+    metrics_file: yolo/ball_v1/metrics.json
+    run_name: ball_v1
+    classes:
+      0: ball
+    train:
+      epochs: 150
+      imgsz: 1280
+      batch: 6
+      mosaic: 1.0
+      close_mosaic: 15
+      scale: 0.25
+      degrees: 0.0
+      fliplr: 0.5
+      mixup: 0.0
+      hsv_h: 0.015
+      hsv_s: 0.5
+      hsv_v: 0.5
+    inference:
+      imgsz: 1280
+      conf: 0.10
+      iou: 0.3
+      max_det: 5
+
+  field:
+    task: segment
+    dataset: field
+    base_weights: yolov8s-seg.pt
+    checkpoint: yolo/field_v1/weights/best.pt
+    metrics_file: yolo/field_v1/metrics.json
+    run_name: field_v1
+    classes:
+      0: pitch
+    train:
+      epochs: 80
+      imgsz: 640
+      batch: 12
+      mosaic: 0.0
+      scale: 0.4
+      degrees: 0.0
+      fliplr: 0.5
+    inference:
+      imgsz: 640
+      conf: 0.35
+      iou: 0.5
+      max_det: 1
+
+  calibration:
+    task: pose
+    dataset: calibration
+    base_weights: yolov8s-pose.pt
+    checkpoint: yolo/calibration_v1/weights/best.pt
+    metrics_file: yolo/calibration_v1/metrics.json
+    run_name: calibration_v1
+    classes:
+      0: pitch
+    kpt_shape: [32, 3]
+    train:
+      epochs: 120
+      imgsz: 960
+      batch: 8
+      mosaic: 0.0
+      scale: 0.3
+      degrees: 0.0
+      fliplr: 0.5
+    inference:
+      imgsz: 960
+      conf: 0.30
+      iou: 0.5
+      max_det: 1
+      kpt_conf_min: 0.50
+      kpt_conf_relaxed: 0.35
+      preprocess: stretch_square
+
+  goalpost:
+    task: detect
+    dataset: goalpost
+    base_weights: yolov8s.pt
+    checkpoint: yolo/goalpost_v1/weights/best.pt
+    metrics_file: yolo/goalpost_v1/metrics.json
+    run_name: goalpost_v1
+    classes:
+      0: goalpost
+    train:
+      epochs: 80
+      imgsz: 960
+      batch: 12
+      mosaic: 1.0
+      close_mosaic: 10
+      scale: 0.5
+      degrees: 0.0
+      fliplr: 0.5
+    inference:
+      imgsz: 960
+      conf: 0.35
+      iou: 0.5
+      max_det: 2

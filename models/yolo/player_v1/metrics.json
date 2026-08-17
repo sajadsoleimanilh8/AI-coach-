@@ -1,0 +1,100 @@
+{
+  "model": "player",
+  "task": "detect",
+  "dataset": "player",
+  "trained_in_parts": 6,
+  "total_epochs": 100,
+  "final_checkpoint_epoch": 68,
+  "parts": {
+    "1": {
+      "status": "completed",
+      "start_epoch": 1,
+      "end_epoch": 17,
+      "epochs_run": 17,
+      "started_at": "2026-08-12T18:36:27.241803+00:00",
+      "finished_at": "2026-08-12T19:43:48.773314+00:00",
+      "note": ""
+    },
+    "2": {
+      "status": "completed",
+      "start_epoch": 18,
+      "end_epoch": 34,
+      "epochs_run": 17,
+      "started_at": "2026-08-13T06:49:01.504662+00:00",
+      "finished_at": "2026-08-13T07:54:41.312737+00:00",
+      "note": ""
+    },
+    "3": {
+      "status": "completed",
+      "start_epoch": 35,
+      "end_epoch": 51,
+      "epochs_run": 17,
+      "started_at": "2026-08-13T08:07:05.224269+00:00",
+      "finished_at": "2026-08-13T09:13:35.035044+00:00",
+      "note": ""
+    },
+    "4": {
+      "status": "completed",
+      "start_epoch": 52,
+      "end_epoch": 68,
+      "epochs_run": 17,
+      "started_at": "2026-08-13T09:20:12.189638+00:00",
+      "finished_at": "2026-08-13T10:26:40.365733+00:00",
+      "note": ""
+    }
+  },
+  "weights": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\models\\yolo\\player_v1\\weights\\best.pt",
+  "dataset_images": 13480,
+  "dataset_labels": 13468,
+  "split_manifests": {
+    "train": {
+      "count": 12248,
+      "unique": 12248
+    },
+    "val": {
+      "count": 948,
+      "unique": 948
+    },
+    "test": {
+      "count": 284,
+      "unique": 284
+    }
+  },
+  "metrics": {
+    "split": "test",
+    "raw": {
+      "metrics/precision(B)": 0.9766305447310867,
+      "metrics/recall(B)": 0.9678535917610741,
+      "metrics/mAP50(B)": 0.9818121477555168,
+      "metrics/mAP50-95(B)": 0.6630621102761016,
+      "fitness": 0.6630621102761016
+    },
+    "box": {
+      "precision": 0.9766305447310867,
+      "recall": 0.9678535917610741,
+      "map50": 0.9818121477555168,
+      "map50_95": 0.6630621102761016
+    },
+    "per_class": {
+      "player": {
+        "precision": 0.9766305447310867,
+        "recall": 0.9678535917610741,
+        "map50": 0.9818121477555168,
+        "map50_95": 0.6630621102761016
+      }
+    },
+    "confusion_matrix_png": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\train\\player_v1_val_test\\confusion_matrix.png",
+    "save_dir": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\train\\player_v1_val_test-2"
+  },
+  "finalized_at": "2026-08-13T10:38:03.020382+00:00",
+  "environment": {
+    "python": "3.11.0",
+    "platform": "Windows-10-10.0.28000-SP0",
+    "git_sha": "2838b6f",
+    "torch": "2.11.0+cu128",
+    "cuda_available": true,
+    "gpu": "NVIDIA GeForce RTX 5070 Ti Laptop GPU",
+    "vram_total_gb": 11.94,
+    "ultralytics": "8.4.98"
+  }
+}

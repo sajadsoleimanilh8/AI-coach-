@@ -1,0 +1,14 @@
+{
+  "calibration_valid": true,
+  "calibration_confidence": 0.7930780049704859,
+  "calibration_metric_method": "deterministic",
+  "calibration_metric_confidence": "normal",
+  "invalid_reason": null,
+  "keypoint_detection_method": "ml_trained",
+  "keypoint_detection_confidence": 0.9644097685813904,
+  "n_keypoints": 8,
+  "field_detected": true,
+  "field_detection_confidence": 0.9794592261314392,
+  "projected_players": [],
+  "projection_suppressed": false
+}

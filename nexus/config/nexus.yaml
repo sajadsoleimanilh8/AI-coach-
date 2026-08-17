@@ -1,0 +1,145 @@
+server:
+  host: 0.0.0.0
+  port: 8100
+  log_level: info
+  log_json: false
+
+local:
+  backend: ollama
+  base_url: http://localhost:11434
+  request_timeout_seconds: 120
+  models:
+    general: mistral:7b
+    embeddings: nomic-embed-text
+
+memory:
+  backend: sqlite
+  database_path: nexus/data/nexus.db
+  session_window_size: 20
+  session_ttl_minutes: 1440
+
+cloud:
+  openai:
+    enabled: true
+    default_model: gpt-4o-mini
+    timeout_seconds: 60
+  anthropic:
+    enabled: true
+    default_model: claude-sonnet-4-5
+    timeout_seconds: 60
+  gemini:
+    enabled: true
+    default_model: gemini-2.5-flash
+    timeout_seconds: 60
+
+routing:
+  default_policy: BALANCED
+  classification:
+    enabled: true
+    long_context_token_threshold: 6000
+    min_confidence: 0.3
+    extra_signals: {}
+  privacy:
+    enabled: true
+    force_local_on_private: true
+    extra_private_patterns: []
+  latency:
+    window_size: 50
+    min_samples: 5
+
+rag:
+  embedding_provider: local
+  chunk_size: 800
+  chunk_overlap: 150
+  default_top_k: 5
+  graph:
+    enabled: false
+    max_hops: 2
+    max_nodes: 20
+
+tools:
+  enabled: [web_search, python, files, database]
+  max_iterations: 3
+  python_timeout_seconds: 10
+  files_allowed_root: nexus/data/workspace
+  web_search_max_results: 5
+
+agents:
+  enabled: [research, coding, data, planning, health, sports,
+            orchestrator, autonomous_research]
+  max_iterations: 8
+  default_policy: BALANCED
+  orchestration:
+    max_depth: 2
+    max_total_delegations: 6
+  research:
+    max_rounds: 3
+
+personal:
+  enabled: true
+  forecast:
+    max_horizon_days: 30
+    min_trend_confidence: 0.5
+  local_only_context: true
+  state_half_life_days: 7
+  state_recent_window_days: 14
+  baseline_window_days: 90
+  baseline_min_samples: 5
+  weakness_min_confidence: 0.5
+  weakness_min_deviation: 0.08
+  trend_min_samples: 4
+
+health:
+  enabled: true
+  min_sample_size: 3
+
+generation:
+  enabled: true
+  default_intensity: 0.7
+  min_intensity: 0.2
+  max_intensity: 1.0
+
+sports:
+  enabled: true
+  backend_base_url: http://localhost:8000
+  request_timeout_seconds: 30
+  metric_dimension_map:
+    decision_making_score: sports.decision_making
+    off_ball_movement_score: sports.positioning
+    press_resistance_score: sports.agility
+    first_touch_score: sports.agility
+    defensive_positioning_score: sports.positioning
+
+verification:
+  enabled: true
+  always_verify_task_types: [health, research, mathematics]
+  enable_fact_check: true
+  enable_judge: true
+  escalate_below: 0.65
+  max_claims: 6
+
+evaluation:
+  datasets_dir: nexus/evaluation/datasets
+  default_suites: [routing, classification, rag, tools, safety, verification,
+                   graph_rag, orchestration, forecast]
+  use_real_providers: false
+  pass_rate_tolerance: 0.02
+  cost_tolerance: 0.25
+  latency_tolerance: 0.5
+
+training:
+  log_interactions: false
+  interaction_retention_days: 180
+  dataset_output_dir: nexus/training/data
+  exclude_privacy_levels: [private]
+  min_verification_score: 0.8
+  available_vram_gb: 12.0
+
+capability_learning:
+  enabled: true
+  min_samples: 20
+  max_learned_weight: 0.7
+
+self_eval:
+  enabled: false
+  log_low_scores: true

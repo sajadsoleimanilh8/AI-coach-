@@ -1,0 +1,101 @@
+models:
+  - id: mistral:7b
+    provider: local
+    kind: chat
+    context_window: 8192
+    capabilities:
+      coding: 0.55
+      math: 0.5
+      reasoning: 0.55
+      language: 0.7
+      vision: 0.0
+
+  - id: nomic-embed-text
+    provider: local
+    kind: embedding
+    context_window: 8192
+    capabilities: {}
+
+  - id: gpt-4o
+    provider: openai
+    kind: chat
+    context_window: 128000
+    capabilities:
+      coding: 0.9
+      math: 0.85
+      reasoning: 0.88
+      language: 0.9
+      vision: 0.85
+    cost_per_1k_input_tokens: 0.0025
+    cost_per_1k_output_tokens: 0.01
+    supports_tool_calling: true
+
+  - id: gpt-4o-mini
+    provider: openai
+    kind: chat
+    context_window: 128000
+    capabilities:
+      coding: 0.75
+      math: 0.7
+      reasoning: 0.72
+      language: 0.8
+      vision: 0.6
+    cost_per_1k_input_tokens: 0.00015
+    cost_per_1k_output_tokens: 0.0006
+    supports_tool_calling: true
+
+  - id: gemini-2.5-pro
+    provider: gemini
+    kind: chat
+    context_window: 1048576
+    capabilities:
+      coding: 0.9
+      math: 0.9
+      reasoning: 0.9
+      language: 0.9
+      vision: 0.85
+    cost_per_1k_input_tokens: 0.00125
+    cost_per_1k_output_tokens: 0.01
+    supports_tool_calling: true
+
+  - id: gemini-2.5-flash
+    provider: gemini
+    kind: chat
+    context_window: 1048576
+    capabilities:
+      coding: 0.78
+      math: 0.75
+      reasoning: 0.78
+      language: 0.85
+      vision: 0.75
+    cost_per_1k_input_tokens: 0.0003
+    cost_per_1k_output_tokens: 0.0025
+    supports_tool_calling: true
+
+  - id: gemini-2.5-flash-lite
+    provider: gemini
+    kind: chat
+    context_window: 1048576
+    capabilities:
+      coding: 0.6
+      math: 0.55
+      reasoning: 0.6
+      language: 0.72
+      vision: 0.6
+    cost_per_1k_input_tokens: 0.0001
+    cost_per_1k_output_tokens: 0.0004
+    supports_tool_calling: true
+
+  - id: claude-sonnet-4-5
+    provider: anthropic
+    kind: chat
+    context_window: 200000
+    capabilities:
+      coding: 0.92
+      math: 0.85
+      reasoning: 0.9
+      language: 0.92
+      vision: 0.85
+    cost_per_1k_input_tokens: 0.003
+    cost_per_1k_output_tokens: 0.015
+    supports_tool_calling: true

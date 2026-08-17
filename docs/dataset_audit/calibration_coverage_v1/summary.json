@@ -1,0 +1,135 @@
+{
+  "images": 317,
+  "splits": {
+    "train": 255,
+    "valid": 34,
+    "test": 28
+  },
+  "duplicate_groups": 0,
+  "cross_split_duplicate_groups": 0,
+  "visible_keypoint_counts": {
+    "6": 3,
+    "7": 5,
+    "8": 11,
+    "9": 17,
+    "10": 6,
+    "11": 7,
+    "12": 15,
+    "13": 18,
+    "14": 20,
+    "15": 24,
+    "16": 50,
+    "17": 59,
+    "18": 62,
+    "19": 12,
+    "20": 1,
+    "21": 4,
+    "22": 3
+  },
+  "keypoint_index_coverage": {
+    "0": 161,
+    "1": 146,
+    "2": 131,
+    "3": 111,
+    "4": 73,
+    "5": 27,
+    "6": 145,
+    "7": 117,
+    "8": 146,
+    "9": 186,
+    "10": 171,
+    "11": 149,
+    "12": 123,
+    "13": 285,
+    "14": 287,
+    "15": 290,
+    "16": 234,
+    "17": 188,
+    "18": 170,
+    "19": 137,
+    "20": 104,
+    "21": 128,
+    "22": 131,
+    "23": 97,
+    "24": 156,
+    "25": 135,
+    "26": 119,
+    "27": 78,
+    "28": 48,
+    "29": 11,
+    "30": 262,
+    "31": 256
+  },
+  "metadata_status": "pitch_end/camera_angle/venue absent from source; human annotation required",
+  "real_world_validation_reference": {
+    "images": 28,
+    "median_true_error_m": 2.004,
+    "mean_true_error_m": 14.597,
+    "max_true_error_m": 58.77,
+    "gate_pass": "1/28"
+  },
+  "collection_spec": {
+    "revision": "2026-08-13 rev2; landmark deficit + clip diversity",
+    "new_images_total": 192,
+    "target_total_after_collection": 509,
+    "clip_diversity": {
+      "min_new_clips": 24,
+      "preferred_new_clips": "32-48",
+      "max_images_per_new_clip": 8,
+      "min_clips_per_bucket": 6,
+      "floor_is_not_a_target": "24 clips x 8 images is exactly 192, so collecting 24 clips means every clip sits at the cap -- the least diverse batch the policy permits. Prefer more clips at 4-6 frames each; scene count is the quantity that was actually missing, and frames within one clip are near-duplicates of each other by construction.",
+      "new_clip_definition": "a distinct broadcast of a distinct fixture. Another segment of a match already among the existing 18 clips does NOT count as new, and neither does a second camera cut of the same passage of play.",
+      "rationale": "192 images capped at 8 per clip forces >=24 independent scenes. 8 is the observed per-clip yield for these framings in the current set (max 7 for index 5, 7 for index 29, 9 for mirror-stress), so it is a ceiling on what one broadcast plausibly supplies rather than an arbitrary cut. It bounds any one clip at 4.2% of the batch, against 24.3% for the worst existing clip (42ba34, 77 of 317).",
+      "enforced_by": "scripts/build_zero_leakage_splits.py::CLIP_POLICY (--enforce-clip-policy)"
+    },
+    "buckets": [
+      {
+        "name": "near_corner_right_in_frame",
+        "images": 64,
+        "requires": "landmark index 29 (right_corner_near) visible",
+        "acceptance": "index 29 in >=90% of accepted frames; >=8 distinct clips",
+        "rationale": "index 29 at 11/317 and those 11 come from only 4 clips, 7 of them from one -- the worst deficit in both image count and scene count; 64 frames lifts it to ~69"
+      },
+      {
+        "name": "near_corner_left_in_frame",
+        "images": 48,
+        "requires": "landmark index 5 (left_corner_near) visible",
+        "acceptance": "index 5 in >=90% of accepted frames; >=6 distinct clips",
+        "rationale": "index 5 at 27/317 across 10 clips; 48 frames lifts it to ~70"
+      },
+      {
+        "name": "mirror_stress_wide_unseen_venue",
+        "images": 48,
+        "requires": "both ends in frame, fixture and venue outside the existing 18 clips",
+        "acceptance": ">=50% carry one end-exclusive near-side anchor; >=6 distinct clips",
+        "rationale": "wide both-ends framing has mean flip-symmetry 0.746, the highest of any framing, and 43 of 317 images already sit at >=0.75; this is where a mirrored fit is unpenalised. The existing 31 qualifying images cannot serve this bucket -- they are by definition the already-seen venues"
+      },
+      {
+        "name": "venue_lighting_camera_diversity",
+        "images": 32,
+        "requires": ">=4 distinct venues, >=3 lighting conditions, camera height varied incl. some low",
+        "acceptance": "no single venue >40% of the bucket; >=4 distinct clips",
+        "rationale": "genuine generalisation cover; does not address the landmark deficit, so it is not given more"
+      }
+    ],
+    "buckets_retired": [
+      {
+        "name": "end_asymmetric_alternating",
+        "was_images": 32,
+        "now_images": 0,
+        "reason": "167 existing images already satisfy it (exactly one end in frame, flip-symmetry <=0.35), drawn from all 18 clips, against a target of 32. The model failed at mirroring despite that supply, so more of it was not the fix.",
+        "action": "curate and tag the existing 167 rather than collect; ensure train retains them across all available clips"
+      }
+    ],
+    "record_per_image": [
+      "venue",
+      "fixture",
+      "pitch_end",
+      "camera_height",
+      "camera_angle",
+      "lighting",
+      "clip_id"
+    ],
+    "splitting_rule": "whole clips only; see scripts/build_zero_leakage_splits.py"
+  }
+}

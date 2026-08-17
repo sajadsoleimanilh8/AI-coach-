@@ -1,0 +1,22 @@
+{
+  "name": "sports-strategy-coach-ai-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "SportsStrategyCoachAI single-page frontend. index.html is the only entry point: the marketing shell is the app shell, and the dashboard mounts into #dashboard-root inside it.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node tests/navigation.spec.mjs && node tests/match-selection.spec.mjs && node tests/match-analysis.spec.mjs"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "playwright": "^1.62.1",
+    "vite": "^6.0.7"
+  }
+}

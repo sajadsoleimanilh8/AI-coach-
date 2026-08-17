@@ -1,0 +1,82 @@
+root_default_windows: "D:/SportsStrategyCoachAI/datasets/processed"
+root_default_posix: "/data/sportsstrategycoachai/datasets/processed"
+
+required_splits: [train, valid, test]
+
+datasets:
+
+  player:
+    task: detect
+    sources:
+      - player_datasets/1
+      - player_datasets/2
+    nc: 1
+    names:
+      0: player
+    replaces_classes_from_legacy: [player, goalkeeper, referee]
+
+  ball:
+    task: detect
+    sources:
+      - ball_datasets/1
+      - ball_datasets/2
+      - ball_datasets/3
+      - ball_datasets/4
+      - ball_datasets/5
+      - ball_datasets/6
+    nc: 1
+    names:
+      0: ball
+
+  field:
+    task: segment
+    sources:
+      - ../derived/field_clipped
+    raw_source: calibration_dataset
+    nc: 1
+    names:
+      0: pitch
+    directory_name_mismatch: true
+
+  calibration:
+    task: pose
+    sources:
+      - field_datasets/2
+    nc: 1
+    names:
+      0: pitch
+    kpt_shape: [32, 3]
+    flip_idx: [24, 25, 26, 27, 28, 29, 22, 23, 21, 17, 18, 19, 20, 13, 14,
+               15, 16, 9, 10, 11, 12, 8, 6, 7, 0, 1, 2, 3, 4, 5, 31, 30]
+    directory_name_mismatch: true
+    keypoint_scheme: indexed_32
+    manual_scheme: constants.CALIBRATION_POINT_ORDER
+
+  goalpost:
+    task: detect
+    sources:
+      - goalpost_datast/1
+    nc: 1
+    names:
+      0: goalpost
+
+external_sources:
+
+  soccernet_calibration_2023:
+    provider: soccernet
+    task: calibration-2023
+    dir: soccernet_calibration_2023
+    splits: [train, valid, test, challenge]
+    homepage: https://www.soccer-net.org/data
+    code: https://github.com/SoccerNet/sn-calibration
+    package: SoccerNet
+    fetch: python -m scripts.fetch_soccernet_calibration
+    requires_password: false
+
+    format: soccernet_lines_json
+    converts_to: calibration
+    conversion_status: not_implemented
+
+    unlabelled_splits: [challenge]
+
+    license_note: research use -- verify terms before commercial training

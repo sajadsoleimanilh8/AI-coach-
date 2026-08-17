@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / frontend build output
+node_modules/
+frontend/web/dist/
+frontend/web/.vite/
+
+# ML artifacts. The five trained checkpoints, the raw datasets and the
+# training runs are machine-local and are never committed -- configs/models.yaml
+# and configs/datasets.yaml describe where they live instead.
+*.pt
+*.pth
+*.onnx
+*.ckpt
+*.safetensors
+datasets/
+runs/
+# ...except the NEXUS eval fixtures, which are small and version controlled.
+!nexus/evaluation/datasets/
+!nexus/evaluation/datasets/**
+# ...and the committed LoRA adapter for the fine-tuned coach model. Its
+# optimizer/rng/scheduler state stays ignored -- only the adapter is shipped.
+!nexus/training/output-qwen3b/**/adapter_model.safetensors
+!nexus/training/output-qwen3b/**/training_args.bin
+
+# Generated training artifacts. The behaviour templates in
+# nexus/training/templates/ ARE version controlled; a mined dataset and a
+# freshly trained adapter are not.
+nexus/training/data/
+nexus/training/output/
+nexus/training/logs/
+nexus/data/
+
+# Runtime data
+storage/uploads/
+backend/database/*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Media
+*.mp4
+*.avi
+*.mov
+*.webm
+
+# Env / secrets
+.env
+*.env
+!.env.example
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Local agent scratch
+.claude/worktrees/

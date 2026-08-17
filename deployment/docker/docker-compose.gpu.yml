@@ -1,0 +1,58 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: sports_strategy_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  inference-worker:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/inference.Dockerfile
+    container_name: sports_strategy_inference_worker
+    environment:
+      DATABASE_URL: postgresql+psycopg2://sports:sports@postgres:5432/sports_strategy
+      REDIS_URL: redis://redis:6379/0
+
+      SSC_MODEL_ROOT: /app/models
+      CALIBRATION_DIR: /app/calibrations
+
+      SSC_MODEL_PLAYER: /app/models/yolo/player_v1/weights/best.pt
+      SSC_MODEL_BALL: /app/models/yolo/ball_v1/weights/best.pt
+      SSC_MODEL_FIELD: /app/models/yolo/field_v1/weights/best.pt
+      SSC_MODEL_CALIBRATION: /app/models/yolo/calibration_v1/weights/best.pt
+      SSC_MODEL_GOALPOST: /app/models/yolo/goalpost_v1/weights/best.pt
+    volumes:
+      - ../../storage:/app/storage
+      - ../../calibrations:/app/calibrations
+
+      - ../../models:/app/models:ro
+      - ../../models/yolo/player_v1/weights/best.pt:/app/models/yolo/player_v1/weights/best.pt:ro
+      - ../../models/yolo/ball_v1/weights/best.pt:/app/models/yolo/ball_v1/weights/best.pt:ro
+      - ../../models/yolo/field_v1/weights/best.pt:/app/models/yolo/field_v1/weights/best.pt:ro
+      - ../../models/yolo/calibration_v1/weights/best.pt:/app/models/yolo/calibration_v1/weights/best.pt:ro
+      - ../../models/yolo/goalpost_v1/weights/best.pt:/app/models/yolo/goalpost_v1/weights/best.pt:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
