@@ -66,5 +66,3 @@ backend/database/*.db
 Thumbs.db
 *.swp
 
-# Local agent scratch
-.claude/worktrees/
