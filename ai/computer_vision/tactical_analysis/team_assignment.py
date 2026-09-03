@@ -49,6 +49,33 @@ def _skin_mask(hsv: np.ndarray) -> np.ndarray:
     return hue_match & in_sat_val
 
 
+def torso_hsv_pixels(crop_bgr: np.ndarray | None) -> np.ndarray | None:
+    """
+    The jersey pixels of one player crop, as an (N, 3) HSV array, or None
+    if the crop is unusable.
+
+    This is the shared front half of every jersey-colour reading in the
+    codebase: take the top TEAM_ASSIGNMENT_CROP_TOP_FRACTION of the box
+    (torso, not shorts/socks/grass), convert to HSV, and drop the pixels
+    that are pitch or skin rather than kit. crop_to_feature() reduces the
+    result to a 3-D clustering feature; player_tracking/reid_merge.py
+    builds a hue/saturation histogram from the same pixels. Keeping the
+    masking here means the two readings can never drift apart.
+    """
+    if crop_bgr is None or crop_bgr.size == 0:
+        return None
+    top_h = max(1, int(round(crop_bgr.shape[0] * TEAM_ASSIGNMENT_CROP_TOP_FRACTION)))
+    torso = crop_bgr[:top_h, :, :]
+    if torso.size == 0:
+        return None
+
+    hsv = cv2.cvtColor(torso, cv2.COLOR_BGR2HSV).astype(np.float64)
+    keep = ~(_grass_mask(hsv) | _skin_mask(hsv))
+    if int(keep.sum()) < TEAM_ASSIGNMENT_MIN_USABLE_PIXELS:
+        return None
+    return hsv[keep]
+
+
 def crop_to_feature(crop_bgr: np.ndarray | None) -> np.ndarray | None:
     """
     One BGR crop in, one 3-D feature vector out (or None if unusable) --
@@ -70,20 +97,12 @@ def crop_to_feature(crop_bgr: np.ndarray | None) -> np.ndarray | None:
     risk the population clustering splitting on lighting conditions rather
     than team.
     """
-    if crop_bgr is None or crop_bgr.size == 0:
-        return None
-    top_h = max(1, int(round(crop_bgr.shape[0] * TEAM_ASSIGNMENT_CROP_TOP_FRACTION)))
-    torso = crop_bgr[:top_h, :, :]
-    if torso.size == 0:
+    pixels = torso_hsv_pixels(crop_bgr)
+    if pixels is None:
         return None
 
-    hsv = cv2.cvtColor(torso, cv2.COLOR_BGR2HSV).astype(np.float64)
-    keep = ~(_grass_mask(hsv) | _skin_mask(hsv))
-    if int(keep.sum()) < TEAM_ASSIGNMENT_MIN_USABLE_PIXELS:
-        return None
-
-    h = hsv[..., 0][keep]
-    s = hsv[..., 1][keep]
+    h = pixels[:, 0]
+    s = pixels[:, 1]
     theta = h * (2.0 * math.pi / 180.0)
     cos_h = float(np.mean(np.cos(theta)))
     sin_h = float(np.mean(np.sin(theta)))
@@ -179,6 +198,50 @@ def _cluster_team_labels(centroids: np.ndarray) -> dict[int, str]:
     order = sorted(range(2), key=lambda i: angles[i])
     return {order[0]: TEAM_LABELS[0], order[1]: TEAM_LABELS[1]}
 
+
+
+def resolve_track_teams(features_by_track: dict[int, list[np.ndarray]]) -> dict[int, str]:
+    """
+    Team label per track, from already-extracted crop_to_feature() vectors.
+
+    The same k=2 clustering and the same majority-vote-weighted-by-margin
+    confidence that assign_teams_with_stats() applies, but taking features
+    the caller already has rather than decoding the video again, and
+    returning only the tracks that clear TEAM_ASSIGNMENT_CONFIDENCE_MIN.
+
+    player_tracking/reid_merge.py uses this as its "same team" gate: it has
+    to know teams BEFORE it rewrites track ids, whereas
+    assign_teams_with_stats() runs afterwards and is keyed on the final ids.
+    """
+    stacked: list[np.ndarray] = []
+    owners: list[int] = []
+    for track_id, feats in sorted(features_by_track.items()):
+        for feat in feats:
+            stacked.append(feat)
+            owners.append(track_id)
+
+    if len(stacked) < MIN_SAMPLE_EVENTS:
+        return {}
+
+    features = np.stack(stacked)
+    owner_ids = np.array(owners)
+    labels, centroids = _kmeans2(features)
+    margins = _margins(features, centroids, labels)
+    cluster_to_team = _cluster_team_labels(centroids)
+
+    resolved: dict[int, str] = {}
+    for track_id in np.unique(owner_ids):
+        track_id = int(track_id)
+        mask = owner_ids == track_id
+        pid_labels = labels[mask]
+        counts = np.bincount(pid_labels, minlength=2)
+        majority = int(np.argmax(counts))
+        vote_fraction = float(counts[majority]) / float(mask.sum())
+        majority_mask = pid_labels == majority
+        mean_margin = float(margins[mask][majority_mask].mean()) if np.any(majority_mask) else 0.0
+        if mean_margin * vote_fraction >= TEAM_ASSIGNMENT_CONFIDENCE_MIN:
+            resolved[track_id] = cluster_to_team[majority]
+    return resolved
 
 
 @dataclass

@@ -1,0 +1,40 @@
+# Project-local BoT-SORT settings, for comparison against ssc_bytetrack.yaml.
+#
+# Same three identity-stability changes as ssc_bytetrack.yaml (see that file
+# for why), plus what BoT-SORT adds over ByteTrack:
+#
+#   gmc_method: sparseOptFlow
+#     Global motion compensation. The Kalman prediction for every track is
+#     corrected by the frame-to-frame camera transform before association,
+#     which is the single biggest structural advantage over ByteTrack on
+#     panning broadcast footage -- ByteTrack has no idea the camera moved
+#     and predicts every player as if it were static.
+#
+#   with_reid: True
+#     Appearance-based association inside the tracker, using the detector's
+#     own features (model: auto). This overlaps with reid_merge.py, but at a
+#     different level: ReID here influences frame-to-frame association
+#     BEFORE a track dies, while reid_merge.py repairs identities AFTER one
+#     has died and a new id has already been issued. The two are
+#     complementary rather than redundant.
+#
+#   appearance_thresh 0.8, proximity_thresh 0.5
+#     Left at stock. Loosening the appearance gate on a football pitch is
+#     actively dangerous: ten outfield players per team wear the same kit,
+#     so appearance alone cannot separate teammates and a permissive gate
+#     swaps them.
+
+tracker_type: botsort
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+new_track_thresh: 0.45
+track_buffer: 75
+match_thresh: 0.9
+fuse_score: True
+
+gmc_method: sparseOptFlow
+
+proximity_thresh: 0.5
+appearance_thresh: 0.8
+with_reid: True
+model: auto

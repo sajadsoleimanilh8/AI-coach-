@@ -1,4 +1,4 @@
-root_default_windows: "D:/SportsStrategyCoachAI/datasets/processed"
+root_default_windows: "D:/SportsStrategyCoachAI/SportsStrategyCoachAI/datasets/processed"
 root_default_posix: "/data/sportsstrategycoachai/datasets/processed"
 
 required_splits: [train, valid, test]
@@ -42,6 +42,7 @@ datasets:
     task: pose
     sources:
       - field_datasets/2
+      - soccernet_kpts_32
     nc: 1
     names:
       0: pitch

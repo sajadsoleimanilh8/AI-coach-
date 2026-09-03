@@ -9,6 +9,15 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
+from ai.computer_vision.tactical_analysis.constants import (
+    PENALTY_AREA_DEPTH_M,
+    PENALTY_AREA_WIDTH_M,
+    PITCH_LENGTH_M,
+    PITCH_WIDTH_M,
+)
+
 logger = logging.getLogger(__name__)
 
 TEAM_COLOURS_BGR = {
@@ -17,8 +26,39 @@ TEAM_COLOURS_BGR = {
 }
 UNASSIGNED_BGR = (139, 116, 100)
 BALL_BGR = (0, 255, 255)
+FIELD_BGR = (0, 200, 0)
+GOALPOST_BGR = (0, 0, 255)
+PITCH_LINE_BGR = (0, 215, 255)
 HUD_TEXT_BGR = (235, 235, 240)
 HUD_PANEL_BGR = (24, 18, 16)
+
+FIELD_FILL_ALPHA = 0.18
+
+_PITCH_CY = PITCH_WIDTH_M / 2.0
+_PENALTY_HALF = PENALTY_AREA_WIDTH_M / 2.0
+
+#: Pitch markings in METRES, as polylines. Reprojected through inv(H) they are
+#: the visual proof that the calibration model produced a usable homography:
+#: if these land on the real touchlines, H is right.
+PITCH_OUTLINE_M: tuple[tuple[tuple[float, float], ...], ...] = (
+    # touchlines + goal lines
+    ((0.0, 0.0), (PITCH_LENGTH_M, 0.0), (PITCH_LENGTH_M, PITCH_WIDTH_M),
+     (0.0, PITCH_WIDTH_M), (0.0, 0.0)),
+    # halfway line
+    ((PITCH_LENGTH_M / 2.0, 0.0), (PITCH_LENGTH_M / 2.0, PITCH_WIDTH_M)),
+    # left penalty area
+    ((0.0, _PITCH_CY - _PENALTY_HALF), (PENALTY_AREA_DEPTH_M, _PITCH_CY - _PENALTY_HALF),
+     (PENALTY_AREA_DEPTH_M, _PITCH_CY + _PENALTY_HALF), (0.0, _PITCH_CY + _PENALTY_HALF)),
+    # right penalty area
+    ((PITCH_LENGTH_M, _PITCH_CY - _PENALTY_HALF),
+     (PITCH_LENGTH_M - PENALTY_AREA_DEPTH_M, _PITCH_CY - _PENALTY_HALF),
+     (PITCH_LENGTH_M - PENALTY_AREA_DEPTH_M, _PITCH_CY + _PENALTY_HALF),
+     (PITCH_LENGTH_M, _PITCH_CY + _PENALTY_HALF)),
+)
+
+#: A reprojected point further than this many pixels outside the frame is a
+#: sign of a near-degenerate homography; drawing it would smear the whole image.
+_MAX_REPROJECTED_PX = 100_000.0
 
 RENDER_OVERLAY_VIDEO = os.getenv("RENDER_OVERLAY_VIDEO", "1") not in ("0", "false", "False")
 
@@ -167,11 +207,27 @@ def render_overlay_video(
     fps: float,
     ball_by_frame: dict | None = None,
     calibration_by_frame: dict | None = None,
+    field_by_frame: dict | None = None,
+    goalposts_by_frame: dict | None = None,
+    homography_by_frame: dict | None = None,
     progress=None,
 ) -> OverlayRenderResult:
     """
     Draw `frames` (list[list[TrackedDetection]], indexed by frame number)
     onto the source video and write an annotated clip beside it.
+
+    Every model gets a mark of its own, so the render is a frame-by-frame
+    check on all five of them rather than on the player detector alone:
+
+    - `ball_by_frame[fid]`        -> BallObservation (`.pixel_x/.pixel_y`)
+    - `field_by_frame[fid]`       -> FieldRegion (`.polygon`, `.confidence`)
+    - `goalposts_by_frame[fid]`   -> list[GoalpostDetection]
+    - `homography_by_frame[fid]`  -> the 3x3 pixel->pitch H for that frame
+    - `calibration_by_frame[fid]` -> a bool, or anything with `.valid`
+      (and optionally `.confidence`); both shapes drive the HUD.
+
+    All coordinates are ORIGINAL pixel space -- the renderer applies the
+    downscale to OVERLAY_MAX_WIDTH itself.
     """
     if not RENDER_OVERLAY_VIDEO:
         return OverlayRenderResult(None, 0, "RENDER_OVERLAY_VIDEO=0")
@@ -193,6 +249,9 @@ def render_overlay_video(
     codec: str | None = None
     ball_by_frame = ball_by_frame or {}
     calibration_by_frame = calibration_by_frame or {}
+    field_by_frame = field_by_frame or {}
+    goalposts_by_frame = goalposts_by_frame or {}
+    homography_by_frame = homography_by_frame or {}
     scale = 1.0
     out_size = None
     out_fps = float(fps) if fps and fps > 0 else 25.0
@@ -227,10 +286,17 @@ def render_overlay_video(
             if out_size != (image.shape[1], image.shape[0]):
                 image = cv2.resize(image, out_size, interpolation=cv2.INTER_AREA)
 
-            _draw_frame(cv2, image, frames[frame_number],
-                        ball_by_frame.get(frame_number), scale)
+            field_region = field_by_frame.get(frame_number)
+            goalposts = goalposts_by_frame.get(frame_number)
+            ball = ball_by_frame.get(frame_number)
+            calibration = calibration_by_frame.get(frame_number)
+
+            _draw_frame(cv2, image, frames[frame_number], ball, scale,
+                        field_region=field_region, goalposts=goalposts,
+                        homography=homography_by_frame.get(frame_number))
             _draw_hud(cv2, image, frame_number, frame_number / out_fps,
-                      frames[frame_number], calibration_by_frame.get(frame_number))
+                      frames[frame_number], calibration,
+                      ball=ball, field_region=field_region, goalposts=goalposts)
             writer.write(image)
             written += 1
 
@@ -283,8 +349,100 @@ def render_overlay_video(
     )
 
 
-def _draw_frame(cv2, image, detections, ball, scale: float = 1.0) -> None:
+def _scaled_points(points, scale: float):
+    """`points` in ORIGINAL pixel space -> an int32 Nx1x2 array in render space,
+    or None when the input is unusable. Every overlay goes through this, so
+    nothing can forget the OVERLAY_MAX_WIDTH downscale the player boxes apply."""
+    try:
+        pts = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    except (ValueError, TypeError):
+        return None
+    if pts.shape[0] < 2 or not np.isfinite(pts).all():
+        return None
+    if np.abs(pts).max() > _MAX_REPROJECTED_PX:
+        return None
+    return np.rint(pts * float(scale)).astype(np.int32).reshape(-1, 1, 2)
+
+
+def _draw_field(cv2, image, field_region, scale: float) -> None:
+    """The segmentation model's pitch mask: translucent fill plus a hard outline."""
+    if field_region is None:
+        return
+    polygon = _scaled_points(getattr(field_region, "polygon", None) or [], scale)
+    if polygon is None or len(polygon) < 3:
+        return
+
+    fill = image.copy()
+    cv2.fillPoly(fill, [polygon], FIELD_BGR)
+    cv2.addWeighted(fill, FIELD_FILL_ALPHA, image, 1.0 - FIELD_FILL_ALPHA, 0.0, image)
+    cv2.polylines(image, [polygon], True, FIELD_BGR, 2, cv2.LINE_AA)
+
+    confidence = getattr(field_region, "confidence", None)
+    if confidence is None:
+        return
+    anchor = polygon.reshape(-1, 2)
+    top = anchor[np.argmin(anchor[:, 1])]
+    cv2.putText(image, f"FIELD {float(confidence):.2f}",
+                (int(top[0]) + 4, max(12, int(top[1]) - 6)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, FIELD_BGR, 1, cv2.LINE_AA)
+
+
+def _draw_goalposts(cv2, image, goalposts, scale: float) -> None:
+    """The goalpost detector's boxes."""
     height, width = image.shape[:2]
+    for post in goalposts or []:
+        try:
+            x1 = int(post.x * scale)
+            y1 = int(post.y * scale)
+            x2 = int((post.x + post.width) * scale)
+            y2 = int((post.y + post.height) * scale)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(width, x2), min(height, y2)
+        if x2 <= x1 or y2 <= y1:
+            continue
+
+        cv2.rectangle(image, (x1, y1), (x2, y2), GOALPOST_BGR, 2)
+        confidence = getattr(post, "confidence", None)
+        label = "GP" if confidence is None else f"GP {float(confidence):.2f}"
+        cv2.putText(image, label, (x1 + 3, max(12, y1 - 5)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, GOALPOST_BGR, 1, cv2.LINE_AA)
+
+
+def _draw_pitch_outline(cv2, image, homography, scale: float) -> None:
+    """Reproject the pitch markings through inv(H). If they land on the real
+    touchlines, the calibration model's homography is usable -- which is the
+    one thing a `calib: valid` text label cannot show."""
+    if homography is None:
+        return
+    try:
+        inverse = np.linalg.inv(np.asarray(homography, dtype=np.float64).reshape(3, 3))
+    except (np.linalg.LinAlgError, ValueError, TypeError):
+        return
+    if not np.isfinite(inverse).all():
+        return
+
+    for line in PITCH_OUTLINE_M:
+        source = np.asarray(line, dtype=np.float32).reshape(-1, 1, 2)
+        try:
+            projected = cv2.perspectiveTransform(source, inverse).reshape(-1, 2)
+        except cv2.error:
+            continue
+        points = _scaled_points(projected, scale)
+        if points is None:
+            continue
+        cv2.polylines(image, [points], False, PITCH_LINE_BGR, 2, cv2.LINE_AA)
+
+
+def _draw_frame(cv2, image, detections, ball, scale: float = 1.0, *,
+                field_region=None, goalposts=None, homography=None) -> None:
+    height, width = image.shape[:2]
+
+    # Field first: it is a filled region, and must sit UNDER everything else.
+    _draw_field(cv2, image, field_region, scale)
+    _draw_pitch_outline(cv2, image, homography, scale)
+    _draw_goalposts(cv2, image, goalposts, scale)
 
     for det in detections or []:
         colour = team_colour_bgr(getattr(det, "team_id", None))
@@ -313,18 +471,53 @@ def _draw_frame(cv2, image, detections, ball, scale: float = 1.0) -> None:
             cv2.circle(image, (cx, cy), 2, BALL_BGR, -1)
 
 
+def _confidence_flag(value, attribute: str = "confidence") -> str:
+    """`Y(0.86)` when a model produced something for this frame, `N` when it
+    did not -- the HUD's answer to "did this model fire?"."""
+    if value is None:
+        return "N"
+    confidence = getattr(value, attribute, None)
+    if confidence is None:
+        return "Y"
+    try:
+        return f"Y({float(confidence):.2f})"
+    except (TypeError, ValueError):
+        return "Y"
+
+
+def _calibration_flag(calibration) -> str:
+    """Accepts the legacy bool as well as a CalibrationState-shaped object."""
+    if calibration is None:
+        return "n/a"
+    if isinstance(calibration, bool):
+        return "valid" if calibration else "none"
+    if not getattr(calibration, "valid", False):
+        return "none"
+    confidence = getattr(calibration, "confidence", None)
+    try:
+        return f"valid({float(confidence):.2f})"
+    except (TypeError, ValueError):
+        return "valid"
+
+
 def _draw_hud(cv2, image, frame_number: int, timestamp: float,
-              detections, calibration_valid: bool | None) -> None:
-    """A one-line strip naming what this frame is and what it was analysed under."""
+              detections, calibration, *,
+              ball=None, field_region=None, goalposts=None) -> None:
+    """One line per frame naming what EVERY model produced for it, so a model
+    that silently stopped firing shows up as an `N` rather than as an overlay
+    that simply looks a bit emptier."""
     height, width = image.shape[:2]
     n_players = len(detections or [])
-    if calibration_valid is None:
-        calib = "n/a"
-    else:
-        calib = "valid" if calibration_valid else "none"
+    n_goalposts = len(goalposts or [])
 
-    text = (f"f{frame_number}  {timestamp:6.2f}s  players:{n_players:2d}  "
-            f"calib:{calib}")
+    ball_visible = ball if getattr(ball, "pixel_x", None) is not None else None
+
+    text = (f"f{frame_number}  {timestamp:6.2f}s  "
+            f"players:{n_players:2d}  "
+            f"ball:{_confidence_flag(ball_visible)}  "
+            f"field:{_confidence_flag(field_region)}  "
+            f"gp:{n_goalposts if n_goalposts else '-'}  "
+            f"calib:{_calibration_flag(calibration)}")
     (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
     pad = 6
     box_h = th + pad * 2

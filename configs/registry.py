@@ -357,12 +357,16 @@ def get_model(name: str) -> ModelSpec:
         train["epochs"] = int(os.environ["SSC_EPOCHS"])
 
     root = model_root()
+    # $SSC_CKPT_<MODEL> points one model at another checkpoint file, for
+    # evaluating a candidate without publishing it. Diagnostics only.
+    override = os.getenv(f"SSC_CKPT_{name.upper()}")
+    checkpoint = Path(override) if override else root / m["checkpoint"]
     return ModelSpec(
         name=name,
         task=m.get("task", "detect"),
         dataset=m["dataset"],
         base_weights=m["base_weights"],
-        checkpoint=root / m["checkpoint"],
+        checkpoint=checkpoint,
         metrics_file=root / m["metrics_file"],
         run_name=m.get("run_name", name),
         classes={int(k): v for k, v in (m.get("classes") or {}).items()},

@@ -247,8 +247,13 @@ def run_pipeline(db: Session, job: ProcessingJob, timer: PipelineTimer, progress
                 f.frame_id: f.ball for f in frame_data
                 if f.ball is not None and f.ball.source is BallSource.detected
             },
-            calibration_by_frame={f.frame_id: bool(f.calibration.valid)
-                                  for f in frame_data},
+            calibration_by_frame={f.frame_id: f.calibration for f in frame_data},
+            field_by_frame={f.frame_id: f.field_region for f in frame_data
+                            if f.field_region is not None},
+            goalposts_by_frame={f.frame_id: f.goalposts for f in frame_data
+                                if f.goalposts},
+            homography_by_frame={f.frame_id: f.calibration.H for f in frame_data
+                                 if f.calibration.valid and f.calibration.H is not None},
             progress=lambda done, total: report(
                 95 + int(4 * done / total),
                 f"Rendering annotated video: frame {done} of {total}...",

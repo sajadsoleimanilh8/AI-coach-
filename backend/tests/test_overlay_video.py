@@ -7,6 +7,9 @@ import numpy as np
 import pytest
 
 from backend.pipeline.overlay_video import (
+    FIELD_BGR,
+    GOALPOST_BGR,
+    PITCH_LINE_BGR,
     UNASSIGNED_BGR,
     TEAM_COLOURS_BGR,
     find_overlay_output,
@@ -22,6 +25,30 @@ class _Det:
         self.player_id = player_id
         self.x, self.y, self.width, self.height = x, y, w, h
         self.team_id = team_id
+
+
+class _Field:
+    """Shaped like frame_data.FieldRegion."""
+
+    def __init__(self, polygon, confidence=0.86):
+        self.polygon = polygon
+        self.confidence = confidence
+
+
+class _Goalpost:
+    """Shaped like frame_data.GoalpostDetection."""
+
+    def __init__(self, x, y, w, h, confidence=0.9):
+        self.x, self.y, self.width, self.height = x, y, w, h
+        self.confidence = confidence
+
+
+class _Calib:
+    """Shaped like frame_data.CalibrationState, as far as the HUD looks."""
+
+    def __init__(self, valid, confidence=0.71):
+        self.valid = valid
+        self.confidence = confidence
 
 
 class _Ball:
@@ -193,3 +220,156 @@ def test_the_ball_marker_is_actually_drawn(tmp_path):
     ball_colours = {colour for _centre, colour in drawn}
     assert ball_colours, "no ball marker was drawn at all"
     assert overlay_module.BALL_BGR in ball_colours
+
+
+def _fixture_video(cv2, path, n_frames=4, size=(320, 240)):
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 25.0, size)
+    if not writer.isOpened():
+        pytest.skip("no encoder available to build the fixture video")
+    for _ in range(n_frames):
+        writer.write(np.zeros((size[1], size[0], 3), np.uint8))
+    writer.release()
+
+
+def _colours_drawn(cv2, monkey, function_name, image_arg=0):
+    """Record the colour argument of every cv2 draw call of one kind."""
+    seen: list = []
+    original = getattr(cv2, function_name)
+
+    def spy(*args, **kwargs):
+        seen.append(args[3] if len(args) > 3 else kwargs.get("color"))
+        return original(*args, **kwargs)
+
+    monkey.setattr(cv2, function_name, spy)
+    return seen
+
+
+def test_field_polygon_and_goalposts_are_drawn(tmp_path):
+    """The field and goalpost models fired on every frame of the broadcast clip
+    and NONE of it reached the render, which is what "only player detection
+    works" actually meant."""
+    cv2 = pytest.importorskip("cv2")
+    source = tmp_path / "src.mp4"
+    _fixture_video(cv2, source)
+
+    monkey = pytest.MonkeyPatch()
+    try:
+        polylines = _colours_drawn(cv2, monkey, "polylines")
+        rectangles = _colours_drawn(cv2, monkey, "rectangle")
+        result = render_overlay_video(
+            str(source), [[] for _ in range(4)], tmp_path / "out.mp4", fps=25.0,
+            field_by_frame={1: _Field([(10, 10), (300, 20), (290, 220), (20, 210)])},
+            goalposts_by_frame={1: [_Goalpost(40, 40, 60, 50)]},
+        )
+    finally:
+        monkey.undo()
+
+    assert result.skipped_reason is None, result.skipped_reason
+    assert FIELD_BGR in polylines
+    assert GOALPOST_BGR in rectangles
+
+
+def test_a_valid_homography_reprojects_the_pitch_outline(tmp_path):
+    """The visual proof that calibration produced a USABLE H, as opposed to a
+    `calib: valid` label that says nothing about whether the matrix is any good."""
+    cv2 = pytest.importorskip("cv2")
+    source = tmp_path / "src.mp4"
+    _fixture_video(cv2, source)
+
+    pixel = np.float32([[20, 220], [300, 220], [260, 40], [60, 40]])
+    pitch = np.float32([[0, 68], [105, 68], [105, 0], [0, 0]])
+    H, _ = cv2.findHomography(pixel, pitch, method=0)
+
+    monkey = pytest.MonkeyPatch()
+    try:
+        polylines = _colours_drawn(cv2, monkey, "polylines")
+        result = render_overlay_video(
+            str(source), [[] for _ in range(4)], tmp_path / "out.mp4", fps=25.0,
+            homography_by_frame={1: H},
+        )
+    finally:
+        monkey.undo()
+
+    assert result.skipped_reason is None, result.skipped_reason
+    assert PITCH_LINE_BGR in polylines
+
+
+@pytest.mark.parametrize("bad_homography", [
+    np.zeros((3, 3)),                      # singular
+    np.full((3, 3), np.nan),               # not finite
+    np.eye(2),                             # wrong shape
+    "not a matrix",
+])
+def test_a_degenerate_homography_does_not_abort_the_render(tmp_path, bad_homography):
+    """A single unusable frame must cost that frame's outline, not the whole
+    video -- this module reports failures, it does not raise them."""
+    cv2 = pytest.importorskip("cv2")
+    source = tmp_path / "src.mp4"
+    _fixture_video(cv2, source)
+
+    result = render_overlay_video(
+        str(source), [[] for _ in range(4)], tmp_path / "out.mp4", fps=25.0,
+        homography_by_frame={1: bad_homography},
+    )
+
+    assert result.skipped_reason is None, result.skipped_reason
+    assert result.frames_written == 4
+
+
+def test_a_degenerate_field_polygon_does_not_abort_the_render(tmp_path):
+    cv2 = pytest.importorskip("cv2")
+    source = tmp_path / "src.mp4"
+    _fixture_video(cv2, source)
+
+    result = render_overlay_video(
+        str(source), [[] for _ in range(4)], tmp_path / "out.mp4", fps=25.0,
+        field_by_frame={0: _Field([]), 1: _Field([(1, 2)]), 2: _Field(None)},
+        goalposts_by_frame={1: [_Goalpost(10, 10, 0, 0)]},
+    )
+
+    assert result.skipped_reason is None, result.skipped_reason
+    assert result.frames_written == 4
+
+
+def test_the_hud_names_every_model_and_marks_the_silent_ones():
+    cv2 = pytest.importorskip("cv2")
+    import backend.pipeline.overlay_video as overlay_module
+
+    texts: list[str] = []
+    monkey = pytest.MonkeyPatch()
+    original = cv2.putText
+
+    def spy(image, text, *args, **kwargs):
+        texts.append(text)
+        return original(image, text, *args, **kwargs)
+
+    image = np.zeros((240, 320, 3), np.uint8)
+    try:
+        monkey.setattr(cv2, "putText", spy)
+        overlay_module._draw_hud(
+            cv2, image, 12, 0.48, [None] * 14, _Calib(True, 0.71),
+            ball=_Ball(10.0, 20.0), field_region=_Field([(0, 0)], 0.86),
+            goalposts=[_Goalpost(1, 1, 2, 2)] * 2,
+        )
+        overlay_module._draw_hud(cv2, image, 13, 0.52, [], False)
+    finally:
+        monkey.undo()
+
+    assert "players:14" in texts[0]
+    assert "field:Y(0.86)" in texts[0]
+    assert "gp:2" in texts[0]
+    assert "calib:valid(0.71)" in texts[0]
+
+    assert "ball:N" in texts[1] and "field:N" in texts[1]
+    assert "gp:-" in texts[1] and "calib:none" in texts[1]
+
+
+def test_the_hud_still_accepts_the_legacy_boolean_calibration_map():
+    """Callers that pass `{frame: bool}` predate the CalibrationState upgrade
+    and must keep rendering the same valid/none label."""
+    cv2 = pytest.importorskip("cv2")
+    import backend.pipeline.overlay_video as overlay_module
+
+    assert overlay_module._calibration_flag(True) == "valid"
+    assert overlay_module._calibration_flag(False) == "none"
+    assert overlay_module._calibration_flag(None) == "n/a"

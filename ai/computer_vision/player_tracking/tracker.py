@@ -5,12 +5,38 @@ detections using ByteTrack.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, asdict
 from typing import Iterator
 
 
 TRACKABLE_CLASS_NAMES = {"player", "goalkeeper"}
 BALL_CLASS_NAME = "ball"
+
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+
+#: Project-local ByteTrack settings. Stock "bytetrack.yaml" is tuned for
+#: generic short clips; configs/trackers/ssc_bytetrack.yaml documents each
+#: divergence and why broadcast football needs it. Callers can still pass
+#: any ultralytics tracker name or path via track_video(tracker_config=...).
+DEFAULT_TRACKER_CONFIG = os.path.join(_REPO_ROOT, "configs", "trackers", "ssc_bytetrack.yaml")
+
+
+def resolve_tracker_config(tracker_config: str) -> str:
+    """
+    Accepts a repo-relative name ("ssc_botsort.yaml"), an absolute path, or a
+    stock ultralytics name ("bytetrack.yaml") and returns what
+    model.track(tracker=...) should be given.
+
+    A stock name is passed through untouched -- ultralytics resolves those
+    against its own cfg/trackers directory.
+    """
+    if os.path.isabs(tracker_config) and os.path.exists(tracker_config):
+        return tracker_config
+    local = os.path.join(_REPO_ROOT, "configs", "trackers", os.path.basename(tracker_config))
+    if os.path.exists(local):
+        return local
+    return tracker_config
 
 
 @dataclass
@@ -46,7 +72,7 @@ def _xyxy_to_xywh(x1: float, y1: float, x2: float, y2: float) -> tuple[float, fl
 def track_video(
     model_path: str,
     video_path: str,
-    tracker_config: str = "bytetrack.yaml",
+    tracker_config: str = DEFAULT_TRACKER_CONFIG,
     conf: float = 0.25,
     classes: list[str] | None = None,
     device: str | None = None,
@@ -66,7 +92,7 @@ def track_video(
 
     track_kwargs = dict(
         source=video_path,
-        tracker=tracker_config,
+        tracker=resolve_tracker_config(tracker_config),
         conf=conf,
         classes=class_filter_ids,
         persist=True,

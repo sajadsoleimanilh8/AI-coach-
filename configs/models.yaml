@@ -66,7 +66,7 @@ models:
       hsv_v: 0.5
     inference:
       imgsz: 1280
-      conf: 0.10
+      conf: 0.20
       iou: 0.3
       max_det: 5
 
@@ -96,7 +96,7 @@ models:
   calibration:
     task: pose
     dataset: calibration
-    base_weights: yolov8s-pose.pt
+    base_weights: yolov8m-pose.pt
     checkpoint: yolo/calibration_v1/weights/best.pt
     metrics_file: yolo/calibration_v1/metrics.json
     run_name: calibration_v1
@@ -104,7 +104,7 @@ models:
       0: pitch
     kpt_shape: [32, 3]
     train:
-      epochs: 120
+      epochs: 30
       imgsz: 960
       batch: 8
       mosaic: 0.0

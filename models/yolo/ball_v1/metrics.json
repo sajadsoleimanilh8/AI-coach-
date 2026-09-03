@@ -2,71 +2,33 @@
   "model": "ball",
   "task": "detect",
   "dataset": "ball",
-  "data_yaml": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\_data\\ball.data.yaml",
-  "weights": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\models\\yolo\\ball_v1\\weights\\best.pt",
-  "metrics_file": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\models\\yolo\\ball_v1\\metrics.json",
-  "metrics": {
-    "split": "test",
-    "raw": {
-      "metrics/precision(B)": 0.8937673142113586,
-      "metrics/recall(B)": 0.8422818791946308,
-      "metrics/mAP50(B)": 0.9156521429328919,
-      "metrics/mAP50-95(B)": 0.6430260922406525,
-      "fitness": 0.6430260922406525
-    },
-    "box": {
-      "precision": 0.8937673142113586,
-      "recall": 0.8422818791946308,
-      "map50": 0.9156521429328919,
-      "map50_95": 0.6430260922406525
-    },
-    "per_class": {
-      "ball": {
-        "precision": 0.8937673142113586,
-        "recall": 0.8422818791946308,
-        "map50": 0.9156521429328919,
-        "map50_95": 0.6430260922406525
-      }
-    },
-    "confusion_matrix_png": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\train\\ball_v1_val_test\\confusion_matrix.png",
-    "save_dir": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\train\\ball_v1_val_test"
+  "weights": "models/yolo/ball_v1/weights/best.pt",
+  "metrics_file": "models/yolo/ball_v1/metrics.json",
+  "source": {
+    "kind": "external_pretrained",
+    "origin": "huggingface: martinjolif/yolo-football-ball-detection",
+    "arch": "yolo11n",
+    "trained_epochs": 50,
+    "trained_on": "huggingface: martinjolif/football-ball-detection",
+    "license": "AGPL-3.0",
+    "swapped_in_at": "2026-08-29",
+    "why": "Our own ball_v1 (yolov8s, trained on the 6 bundled Roboflow ball datasets) detects the ball in only ~2-16% of real broadcast frames. Retraining on the same data 4x38 epochs made real-world performance WORSE (overfit to close-up Roboflow images). This external YOLO11n checkpoint is trained for broadcast-view ball detection and generalises to our footage. Kept the old checkpoint at runs/_eval/ball_OLD_leaky.pt."
   },
-  "started_at": "2026-08-12T11:01:50.835615+00:00",
-  "finished_at": "2026-08-12T12:15:03.850831+00:00",
-  "train_args": {
-    "device": "0",
-    "workers": "8",
-    "seed": "0",
-    "patience": "25",
-    "optimizer": "auto",
-    "val": "True",
-    "plots": "True",
-    "exist_ok": "False",
-    "epochs": "150",
-    "imgsz": "1280",
-    "batch": "6",
-    "mosaic": "1.0",
-    "close_mosaic": "15",
-    "scale": "0.25",
-    "degrees": "0.0",
-    "fliplr": "0.5",
-    "mixup": "0.0",
-    "hsv_h": "0.015",
-    "hsv_s": "0.5",
-    "hsv_v": "0.5",
-    "data": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\_data\\ball.data.yaml",
-    "project": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\train",
-    "name": "ball_v1",
-    "resume": "False"
+  "real_clip_eval": {
+    "note": "fraction of stride-sampled frames with at least one ball detection at conf=0.10, imgsz=1280; not mAP",
+    "conf": 0.10,
+    "imgsz": 1280,
+    "clips": {
+      "samples/test.mp4":  {"old_hit_rate": 0.042, "new_hit_rate": 0.658, "new_mean_conf": 0.619},
+      "videos/test1.mp4":  {"old_hit_rate": 0.158, "new_hit_rate": 0.575, "new_mean_conf": 0.549},
+      "videos/test2.mp4":  {"old_hit_rate": 0.042, "new_hit_rate": 0.508, "new_mean_conf": 0.566},
+      "videos/test3.mp4":  {"old_hit_rate": 0.017, "new_hit_rate": 0.733, "new_mean_conf": 0.441}
+    }
   },
+  "finalized_at": "2026-08-29",
   "environment": {
-    "python": "3.11.0",
-    "platform": "Windows-10-10.0.28000-SP0",
-    "git_sha": "2838b6f",
+    "ultralytics": "8.4.116",
     "torch": "2.11.0+cu128",
-    "cuda_available": true,
-    "gpu": "NVIDIA GeForce RTX 5070 Ti Laptop GPU",
-    "vram_total_gb": 11.94,
-    "ultralytics": "8.4.98"
+    "gpu": "NVIDIA GeForce RTX 5070 Ti Laptop GPU"
   }
 }

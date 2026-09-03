@@ -2,76 +2,173 @@
   "model": "calibration",
   "task": "pose",
   "dataset": "calibration",
-  "data_yaml": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\_data\\calibration.data.yaml",
-  "weights": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\models\\yolo\\calibration_v1\\weights\\best.pt",
-  "metrics_file": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\models\\yolo\\calibration_v1\\metrics.json",
+  "trained_in_parts": 4,
+  "total_epochs": 30,
+  "final_checkpoint_epoch": 30,
+  "parts": {
+    "1": {
+      "status": "completed",
+      "start_epoch": 1,
+      "end_epoch": 8,
+      "epochs_run": 8,
+      "started_at": "2026-08-31T06:58:56.580015+00:00",
+      "finished_at": "2026-08-31T07:59:54.719630+00:00",
+      "note": ""
+    },
+    "2": {
+      "status": "completed",
+      "start_epoch": 9,
+      "end_epoch": 16,
+      "epochs_run": 8,
+      "started_at": "2026-08-31T08:00:03.668694+00:00",
+      "finished_at": "2026-08-31T09:04:51.502514+00:00",
+      "note": ""
+    },
+    "3": {
+      "status": "completed",
+      "start_epoch": 17,
+      "end_epoch": 23,
+      "epochs_run": 7,
+      "started_at": "2026-08-31T09:04:56.487499+00:00",
+      "finished_at": "2026-08-31T09:57:27.497611+00:00",
+      "note": ""
+    },
+    "4": {
+      "status": "completed",
+      "start_epoch": 24,
+      "end_epoch": 30,
+      "epochs_run": 7,
+      "started_at": "2026-09-01T12:24:25.450454+00:00",
+      "finished_at": "2026-09-01T13:07:01.086391+00:00",
+      "note": ""
+    }
+  },
+  "weights": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\models\\yolo\\calibration_v1\\weights\\best.pt",
+  "dataset_images": 12226,
+  "dataset_labels": 12226,
+  "split_manifests": {
+    "train": {
+      "count": 10558,
+      "unique": 10558
+    },
+    "val": {
+      "count": 734,
+      "unique": 734
+    },
+    "test": {
+      "count": 928,
+      "unique": 928
+    }
+  },
   "metrics": {
     "split": "test",
     "raw": {
-      "metrics/precision(B)": 1.0,
-      "metrics/recall(B)": 1.0,
-      "metrics/mAP50(B)": 0.995,
-      "metrics/mAP50-95(B)": 0.9849365079365079,
-      "metrics/precision(P)": 1.0,
-      "metrics/recall(P)": 1.0,
-      "metrics/mAP50(P)": 0.995,
-      "metrics/mAP50-95(P)": 0.431934233252128,
-      "fitness": 1.4168707411886359
+      "metrics/precision(B)": 0.953086257672786,
+      "metrics/recall(B)": 0.9632452582816814,
+      "metrics/mAP50(B)": 0.9869369209442673,
+      "metrics/mAP50-95(B)": 0.9150366756123864,
+      "metrics/precision(P)": 0.8944182481865769,
+      "metrics/recall(P)": 0.8609913793103449,
+      "metrics/mAP50(P)": 0.8648021239937256,
+      "metrics/mAP50-95(P)": 0.6811089936824233,
+      "fitness": 1.5961456692948097
     },
     "box": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "map50": 0.995,
-      "map50_95": 0.9849365079365079
+      "precision": 0.953086257672786,
+      "recall": 0.9632452582816814,
+      "map50": 0.9869369209442673,
+      "map50_95": 0.9150366756123864
     },
     "per_class": {
       "pitch": {
-        "precision": 1.0,
-        "recall": 1.0,
-        "map50": 0.995,
-        "map50_95": 0.9849365079365079
+        "precision": 0.953086257672786,
+        "recall": 0.9632452582816814,
+        "map50": 0.9869369209442673,
+        "map50_95": 0.9150366756123864
       }
     },
     "pose": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "map50": 0.995,
-      "map50_95": 0.431934233252128
+      "precision": 0.8944182481865769,
+      "recall": 0.8609913793103449,
+      "map50": 0.8648021239937256,
+      "map50_95": 0.6811089936824233
     },
-    "confusion_matrix_png": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\train\\calibration_v1_val_test\\confusion_matrix.png",
-    "save_dir": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\train\\calibration_v1_val_test"
+    "confusion_matrix_png": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\train\\calibration_v1_val_test\\confusion_matrix.png",
+    "save_dir": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\train\\calibration_v1_val_test-2"
   },
-  "started_at": "2026-08-12T16:22:29.808747+00:00",
-  "finished_at": "2026-08-12T16:34:54.523471+00:00",
-  "train_args": {
-    "device": "0",
-    "workers": "8",
-    "seed": "0",
-    "patience": "25",
-    "optimizer": "auto",
-    "val": "True",
-    "plots": "True",
-    "exist_ok": "False",
-    "epochs": "120",
-    "imgsz": "960",
-    "batch": "8",
-    "mosaic": "0.0",
-    "scale": "0.3",
-    "degrees": "0.0",
-    "fliplr": "0.5",
-    "data": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\_data\\calibration.data.yaml",
-    "project": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\train",
-    "name": "calibration_v1",
-    "resume": "False"
-  },
+  "finalized_at": "2026-09-01T13:07:38.218503+00:00",
   "environment": {
     "python": "3.11.0",
     "platform": "Windows-10-10.0.28000-SP0",
-    "git_sha": "2838b6f",
+    "git_sha": "8e3a993",
     "torch": "2.11.0+cu128",
     "cuda_available": true,
     "gpu": "NVIDIA GeForce RTX 5070 Ti Laptop GPU",
     "vram_total_gb": 11.94,
-    "ultralytics": "8.4.98"
+    "ultralytics": "8.4.116"
+  },
+  "dataset_composition": {
+    "sources": [
+      "field_datasets/2",
+      "soccernet_kpts_32"
+    ],
+    "field_datasets/2": {
+      "images": 317,
+      "origin": "Roboflow football-field-detection export (.rf.<hash> filenames, DFL clip ids); 960x960 square-stretched"
+    },
+    "soccernet_kpts_32": {
+      "images": 11909,
+      "origin": "HuggingFace nreHieW/SoccerNet_Field_Keypoints, converted by scripts/convert_pitch_kpts.py",
+      "kept_fraction": 0.615,
+      "dropped": {
+        "is_bad": 938,
+        "fewer_than_6_visible_landmarks": 5002
+      },
+      "label_quality": "0.080 m median reprojection through PITCH_KEYPOINTS_32"
+    }
+  },
+  "keypoint_source": {
+    "scheme": "PITCH_KEYPOINTS_32 (ai/computer_vision/tactical_analysis/pitch_keypoints.py)",
+    "roboflow_mapping": "identity; see _roboflow_pitch_map.py::ROBOFLOW_TO_OURS",
+    "soccernet_mapping": "derived at import from nreHieW/Eagle eagle/utils/pitch.py GROUND_TRUTH_POINTS, with y -> 68-y (their y grows toward the opposite touchline); max match distance 0.15 m. NOT the 'No Bells Just Whistles' keypoint_world_coords_2D list, which is a different 57-slot order (~26 m residual on this data).",
+    "order_verified": true,
+    "order_evidence": "leave-one-out reprojection on test1/2/3: pooled median 5.2 px, 78.7% within 15 px, no index systematically occupied by another; 0.102 m median pitch residual on 928 held-out SoccerNet test frames"
+  },
+  "broadcast_clip_eval": {
+    "command": "scripts/evaluate_calibration_video.py <clip> --frames 900 --stride 3 --pipeline",
+    "note": "valid_pct is the pipeline's own gate. geometrically_sane_pct additionally requires the four frame corners to map inside a plausible pitch region; the gap between them is degenerate homographies that fit a local keypoint cluster but diverge globally. Judge usability on the sane column.",
+    "clips": {
+      "test1": {
+        "valid_pct": 51.7,
+        "median_reproj_m": 0.062,
+        "geometrically_sane_pct": 26.3,
+        "sane_among_valid_pct": 51.0,
+        "baseline_valid_pct": 9.0,
+        "baseline_sane_pct": 2.3
+      },
+      "test2": {
+        "valid_pct": 46.3,
+        "median_reproj_m": 0.129,
+        "geometrically_sane_pct": 7.0,
+        "sane_among_valid_pct": 15.1,
+        "baseline_valid_pct": 19.0,
+        "baseline_sane_pct": 0.0
+      },
+      "test3": {
+        "valid_pct": 69.0,
+        "median_reproj_m": 1.263,
+        "geometrically_sane_pct": 8.0,
+        "sane_among_valid_pct": 11.6,
+        "baseline_valid_pct": 12.0,
+        "baseline_sane_pct": 0.0
+      }
+    },
+    "acceptance": {
+      "valid_ge_60pct_all_clips": false,
+      "median_reproj_lt_3m_all_clips": true,
+      "overlay_lines_on_touchlines_majority": false,
+      "keypoint_order_verified": true,
+      "test_suite_green": true
+    }
   }
 }
