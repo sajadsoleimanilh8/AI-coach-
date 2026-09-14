@@ -3,22 +3,95 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 
 from nexus.api.schemas import (
+    AdjustmentSchema,
     CoachReportResponse,
+    GamePlanSchema,
+    OpponentStrengthSchema,
+    OpponentWeaknessSchema,
     PreMatchAssessmentSchema,
     PreMatchCoachReportResponse,
+    PrincipleSchema,
+    ProposedShapeSchema,
     SportsIngestRequest,
     SportsIngestResponse,
     TacticalFindingSchema,
+    TimelineSectionsSchema,
     VideoAnalyzeRequest,
 )
 from nexus.core.exceptions import ProviderUnavailableError
 from nexus.personal.state import PersonalStateEngine
 from nexus.sports.adapter import SportsDataAdapter
 from nexus.sports.coach import CoachAssistant, CoachReport, PreMatchCoachReport
+from nexus.sports.game_plan import GamePlan
+from nexus.sports.timeline import TIMELINE_SECTIONS
 from nexus.sports.ingest import ingest_player_metrics_as_signals
 from nexus.sports.video import VideoAnalysisService
 
 router = APIRouter()
+
+
+def _to_game_plan_schema(plan: GamePlan | None) -> GamePlanSchema | None:
+    if plan is None:
+        return None
+    return GamePlanSchema(
+        opponent_strengths=[
+            OpponentStrengthSchema(
+                key=s.key,
+                label=s.label,
+                value=s.value,
+                supporting_metrics=s.supporting_metrics,
+                confidence=s.confidence,
+                sample_size=s.sample_size,
+                evidence=s.evidence,
+            )
+            for s in plan.opponent_strengths
+        ],
+        opponent_weaknesses=[
+            OpponentWeaknessSchema(
+                key=w.key,
+                label=w.label,
+                severity=w.severity,
+                value=w.value,
+                supporting_metrics=w.supporting_metrics,
+                confidence=w.confidence,
+                sample_size=w.sample_size,
+                evidence=w.evidence,
+                zone=w.zone,
+            )
+            for w in plan.opponent_weaknesses
+        ],
+        proposed_shape=(
+            ProposedShapeSchema(
+                shape=plan.proposed_shape.shape,
+                reason=plan.proposed_shape.reason,
+                supporting_metrics=plan.proposed_shape.supporting_metrics,
+            )
+            if plan.proposed_shape is not None
+            else None
+        ),
+        principles=[
+            PrincipleSchema(
+                statement=p.statement,
+                grounded_in=p.grounded_in,
+                supporting_metrics=p.supporting_metrics,
+            )
+            for p in plan.principles
+        ],
+        adjustments=[
+            AdjustmentSchema(
+                instruction=a.instruction,
+                targets_weakness=a.targets_weakness,
+                rationale=a.rationale,
+                supporting_metrics=a.supporting_metrics,
+                priority=a.priority,
+            )
+            for a in plan.adjustments
+        ],
+        uncovered_weaknesses=plan.uncovered,
+        unmeasured_metrics=sorted(set(plan.unmeasured)),
+        is_partial=plan.is_partial,
+        partial_reason=plan.partial_reason,
+    )
 
 
 def _to_response(report: CoachReport) -> CoachReportResponse:
@@ -38,6 +111,17 @@ def _to_response(report: CoachReport) -> CoachReportResponse:
         coverage=report.coverage,
         narrative=report.narrative,
         model_used=report.model_used,
+        game_plan=_to_game_plan_schema(report.game_plan),
+        timeline_sections=TimelineSectionsSchema(
+            available=report.timeline.available_sections if report.timeline else [],
+            missing=(
+                report.timeline.missing_sections
+                if report.timeline
+                else list(TIMELINE_SECTIONS)
+            ),
+        ),
+        is_partial=report.is_partial,
+        narrative_warnings=report.narrative_warnings,
     )
 
 
@@ -110,18 +194,44 @@ async def get_prematch_report(
 
 
 @router.post("/sports/video/analyze", response_model=CoachReportResponse)
-async def analyze_video(payload: VideoAnalyzeRequest, request: Request) -> CoachReportResponse:
+async def analyze_video(request: Request) -> CoachReportResponse:
     """Submits footage to the football backend's own processing endpoint,
     polls until it finishes, and narrates the result through the Group C
     adapter. No vision code runs in nexus/ — that stays in backend/ and
-    ai/, reached over HTTP."""
+    ai/, reached over HTTP.
+
+    Takes either a multipart upload (`file`, plus `match_id`/`player_id`
+    form fields) or the JSON body. One route rather than two because both
+    are the same operation from the caller's side: hand over a video, get
+    back a CoachReport. Which one is in use is read off the content type.
+    """
     service: VideoAnalysisService = request.app.state.video_analysis_service
+    content_type = request.headers.get("content-type", "")
+
     try:
-        report = await service.analyze(
-            video_path_or_url=payload.video_path_or_url,
-            match_id=payload.match_id,
-            player_id=payload.player_id,
-        )
+        if content_type.startswith("multipart/form-data"):
+            form = await request.form()
+            upload = form.get("file")
+            if upload is None or not hasattr(upload, "read"):
+                raise HTTPException(
+                    status_code=422,
+                    detail="multipart request must include a 'file' part holding the video",
+                )
+            raw_player_id = form.get("player_id")
+            report = await service.analyze_upload(
+                filename=getattr(upload, "filename", None) or "upload.mp4",
+                content=await upload.read(),
+                match_id=str(form.get("match_id") or ""),
+                player_id=int(raw_player_id) if raw_player_id else None,
+                content_type=getattr(upload, "content_type", None),
+            )
+        else:
+            payload = VideoAnalyzeRequest.model_validate(await request.json())
+            report = await service.analyze(
+                video_path_or_url=payload.video_path_or_url,
+                match_id=payload.match_id,
+                player_id=payload.player_id,
+            )
     except ProviderUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return _to_response(report)

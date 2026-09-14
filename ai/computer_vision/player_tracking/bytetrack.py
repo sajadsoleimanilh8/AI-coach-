@@ -5,6 +5,13 @@ import numpy as np
 import scipy.linalg
 from scipy.optimize import linear_sum_assignment
 
+#: How many recently-removed tracks to remember. _sub_tracks() uses the list
+#: only to stop a just-removed id being resurrected into lost_stracks, so the
+#: useful lifetime is one track_buffer; this is a generous multiple of the
+#: largest buffer the project configures (75 in ssc_bytetrack.yaml).
+REMOVED_TRACK_HISTORY = 1000
+
+
 class TrackState(Enum):
     New = 0
     Tracked = 1
@@ -107,8 +114,25 @@ class STrack:
         STrack._count = 0
 
     @property
+    def tlwh(self) -> np.ndarray:
+        """Current box estimate, in top-left/width/height.
+
+        Derived from the Kalman mean once the track has one, NOT from the
+        last raw measurement. This is what makes predict() mean anything:
+        BYTETracker.update() calls predict() on the whole pool and then
+        associates on IoU, so if this returned the last observed box the
+        prediction would be computed and silently thrown away, and a track
+        would be matched against where its player WAS rather than where the
+        filter thinks the player now IS. Detections (mean is None, they are
+        never filtered) fall back to the raw box.
+        """
+        if self.mean is None:
+            return self._tlwh.copy()
+        return self.xyah_to_tlwh(self.mean[:4])
+
+    @property
     def tlbr(self) -> np.ndarray:
-        ret = self._tlwh.copy()
+        ret = self.tlwh
         ret[2:] += ret[:2]
         return ret
 
@@ -177,27 +201,47 @@ def bbox_iou(boxes1: np.ndarray, boxes2: np.ndarray) -> np.ndarray:
     union_area = b1_area[:, None] + b2_area - inter_area
     return inter_area / np.maximum(union_area, 1e-6)
 
+#: Cost stamped onto pairs the gate forbids. Large enough that the optimiser
+#: takes any permitted alternative first, finite because
+#: scipy.linear_sum_assignment rejects inf.
+_FORBIDDEN_COST = 1e6
+
+
 def linear_assignment(cost_matrix: np.ndarray, thresh: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Hungarian matching, with `thresh` applied BEFORE the solve.
+
+    Filtering afterwards is wrong, not merely wasteful: linear_sum_assignment
+    minimises total cost across the whole matrix, so it will happily spend a
+    row and a column on a pair the threshold is going to reject, and that
+    choice pushes some other detection onto the wrong track. Masking the
+    forbidden pairs up front means they are only ever chosen when nothing
+    else is available, and they are still dropped from `matches` afterwards.
+    """
     if cost_matrix.size == 0:
         return np.empty((0, 2), dtype=int), np.arange(cost_matrix.shape[0]), np.arange(cost_matrix.shape[1])
-    
-    row_ind, col_ind = linear_sum_assignment(cost_matrix)
-    
+
+    gated = np.where(cost_matrix > thresh, _FORBIDDEN_COST, cost_matrix)
+    row_ind, col_ind = linear_sum_assignment(gated)
+
     matches, unmatched_a, unmatched_b = [], [], []
     for r, c in zip(row_ind, col_ind):
         if cost_matrix[r, c] > thresh:
-            unmatched_a.append(r)
-            unmatched_b.append(c)
+            unmatched_a.append(int(r))
+            unmatched_b.append(int(c))
         else:
-            matches.append([r, c])
+            matches.append([int(r), int(c)])
 
     matches = np.array(matches) if len(matches) > 0 else np.empty((0, 2), dtype=int)
-    
-    all_rows, all_cols = np.arange(cost_matrix.shape[0]), np.arange(cost_matrix.shape[1])
-    unmatched_a.extend(list(set(all_rows) - set(row_ind)))
-    unmatched_b.extend(list(set(all_cols) - set(col_ind)))
-    
-    return matches, np.array(unmatched_a, dtype=int), np.array(unmatched_b, dtype=int)
+
+    # sorted(), not set-difference order, so the unmatched lists are in a
+    # stable order for every caller and every run.
+    matched_rows, matched_cols = set(row_ind.tolist()), set(col_ind.tolist())
+    unmatched_a.extend(r for r in range(cost_matrix.shape[0]) if r not in matched_rows)
+    unmatched_b.extend(c for c in range(cost_matrix.shape[1]) if c not in matched_cols)
+
+    return (matches,
+            np.array(sorted(unmatched_a), dtype=int),
+            np.array(sorted(unmatched_b), dtype=int))
 
 class BYTETracker:
     def __init__(self, track_thresh: float = 0.5, track_buffer: int = 30, match_thresh: float = 0.8):
@@ -228,10 +272,20 @@ class BYTETracker:
         activated_stracks, refind_stracks, lost_stracks, removed_stracks = [], [], [], []
 
         if len(output_results) == 0:
+            # A frame with no detections still AGES every lost track. Taking
+            # the early return without expiring them let a track survive
+            # arbitrarily far past track_buffer -- 40 frames on a buffer of 5
+            # in the regression test -- and then re-claim an unrelated
+            # detection when play came back. Broadcast football hits this
+            # constantly: a cut to the crowd or a replay wipes the detections
+            # for a second or more, which is exactly when an identity should
+            # be allowed to die rather than jump to whoever appears next.
             for strack in self.tracked_stracks:
                 strack.mark_lost()
                 self.lost_stracks.append(strack)
             self.tracked_stracks = []
+            self._expire_lost_tracks()
+            self._trim_removed_tracks()
             return []
 
         scores = output_results[:, 4]
@@ -307,10 +361,7 @@ class BYTETracker:
             track.activate(self.kalman_filter, self.frame_id)
             activated_stracks.append(track)
 
-        for track in self.lost_stracks:
-            if self.frame_id - track.frame_id > self.track_buffer:
-                track.mark_removed()
-                removed_stracks.append(track)
+        removed_stracks.extend(self._expire_lost_tracks(collect=True))
 
         self.tracked_stracks = [t for t in self.tracked_stracks if t.state == TrackState.Tracked]
         self.tracked_stracks = self._join_tracks(self.tracked_stracks, activated_stracks)
@@ -319,8 +370,40 @@ class BYTETracker:
         self.lost_stracks.extend(lost_stracks)
         self.lost_stracks = self._sub_tracks(self.lost_stracks, self.removed_stracks)
         self.removed_stracks.extend(removed_stracks)
+        self._trim_removed_tracks()
 
         return [t for t in self.tracked_stracks if t.is_activated]
+
+    def _expire_lost_tracks(self, collect: bool = False) -> List[STrack]:
+        """Mark every lost track older than track_buffer as removed.
+
+        Called on EVERY frame, including frames with no detections at all --
+        a lost track ages by wall-clock frames, not by frames that happened
+        to contain something.
+        """
+        expired = []
+        for track in self.lost_stracks:
+            if self.frame_id - track.frame_id > self.track_buffer:
+                track.mark_removed()
+                expired.append(track)
+        if not collect:
+            self.removed_stracks.extend(expired)
+            self.lost_stracks = self._sub_tracks(self.lost_stracks, expired)
+        return expired
+
+    def _trim_removed_tracks(self) -> None:
+        """Bound the removed-track history.
+
+        `removed_stracks` is only ever read by _sub_tracks() to keep freshly
+        removed ids out of lost_stracks, so nothing needs an id older than
+        the buffer. Retaining all of them grew to 295 entries in 300 frames
+        of transient blobs, and since _sub_tracks() walks the whole list once
+        per frame that is a quadratic cost over a full match as well as
+        unbounded memory.
+        """
+        if len(self.removed_stracks) <= REMOVED_TRACK_HISTORY:
+            return
+        self.removed_stracks = self.removed_stracks[-REMOVED_TRACK_HISTORY:]
 
     def _join_tracks(self, tlista: List[STrack], tlistb: List[STrack]) -> List[STrack]:
         exists = {}

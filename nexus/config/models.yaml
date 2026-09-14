@@ -1,4 +1,33 @@
 models:
+  # The registry is a catalog of KNOWN models, not of installed ones -- the
+  # cloud entries below are listed the same way without being reachable.
+  # What makes a model selectable is its provider being configured; the
+  # router then fails over if a specific model turns out to be absent.
+  #
+  # The qwen2.5 entries are the ones actually pulled locally, and are ranked
+  # above mistral:7b so a default install routes to something present.
+  - id: qwen2.5:3b
+    provider: local
+    kind: chat
+    context_window: 32768
+    capabilities:
+      coding: 0.6
+      math: 0.55
+      reasoning: 0.62
+      language: 0.78
+      vision: 0.0
+
+  - id: qwen2.5:0.5b
+    provider: local
+    kind: chat
+    context_window: 32768
+    capabilities:
+      coding: 0.3
+      math: 0.25
+      reasoning: 0.3
+      language: 0.4
+      vision: 0.0
+
   - id: mistral:7b
     provider: local
     kind: chat

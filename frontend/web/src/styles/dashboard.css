@@ -1954,3 +1954,108 @@ code {
   flex-direction: column;
   gap: 0.5rem;
 }
+
+/* --- LLM Coach Report ---------------------------------------------------
+   The report mixes measured data with one generated field. The styling
+   keeps that split legible: evidence and supporting-metric lines are set in
+   the same muted mono as every other "this is the raw measurement" surface,
+   and the narrative is visually set apart as prose. */
+
+.dash-coach-report {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+
+.dash-coach-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1.1rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.dash-finding-text {
+  font-size: 0.82rem;
+  line-height: 1.55;
+  margin: 0 0 0.6rem;
+}
+
+.dash-shape-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-left: 2px solid rgba(120, 170, 255, 0.55);
+  border-radius: 4px;
+}
+
+.dash-evidence-list,
+.dash-unavailable-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.dash-evidence-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.3rem;
+}
+
+.dash-principle-list,
+.dash-adjustment-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.dash-principle-list li,
+.dash-adjustment-list li {
+  padding-left: 0.35rem;
+}
+
+.dash-principle-text,
+.dash-adjustment-text {
+  display: block;
+  font-size: 0.86rem;
+  line-height: 1.55;
+  margin: 0 0 0.4rem;
+}
+
+.dash-narrative {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 1rem 1.15rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.dash-narrative p {
+  margin: 0;
+  font-size: 0.86rem;
+  line-height: 1.65;
+}
+
+.dash-narrative-note,
+.dash-timeline-note {
+  margin: 0 0 0.5rem;
+}
+
+.dash-unavailable-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+}

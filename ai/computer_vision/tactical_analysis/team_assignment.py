@@ -200,18 +200,22 @@ def _cluster_team_labels(centroids: np.ndarray) -> dict[int, str]:
 
 
 
-def resolve_track_teams(features_by_track: dict[int, list[np.ndarray]]) -> dict[int, str]:
+def resolve_track_teams(features_by_track: dict[int, list[np.ndarray]],
+                        confidence_min: float = TEAM_ASSIGNMENT_CONFIDENCE_MIN) -> dict[int, str]:
     """
     Team label per track, from already-extracted crop_to_feature() vectors.
 
     The same k=2 clustering and the same majority-vote-weighted-by-margin
     confidence that assign_teams_with_stats() applies, but taking features
     the caller already has rather than decoding the video again, and
-    returning only the tracks that clear TEAM_ASSIGNMENT_CONFIDENCE_MIN.
+    returning only the tracks that clear `confidence_min`.
 
     player_tracking/reid_merge.py uses this as its "same team" gate: it has
     to know teams BEFORE it rewrites track ids, whereas
     assign_teams_with_stats() runs afterwards and is keyed on the final ids.
+    It passes a lower `confidence_min` than the default on purpose -- see
+    that module's _resolve_teams() for why a label good enough to SEPARATE
+    two tracks is a weaker thing than one good enough to REPORT.
     """
     stacked: list[np.ndarray] = []
     owners: list[int] = []
@@ -239,7 +243,7 @@ def resolve_track_teams(features_by_track: dict[int, list[np.ndarray]]) -> dict[
         vote_fraction = float(counts[majority]) / float(mask.sum())
         majority_mask = pid_labels == majority
         mean_margin = float(margins[mask][majority_mask].mean()) if np.any(majority_mask) else 0.0
-        if mean_margin * vote_fraction >= TEAM_ASSIGNMENT_CONFIDENCE_MIN:
+        if mean_margin * vote_fraction >= confidence_min:
             resolved[track_id] = cluster_to_team[majority]
     return resolved
 

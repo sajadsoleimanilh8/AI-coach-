@@ -83,6 +83,14 @@ CALIBRATION_RETRY_STRIDE = int(os.getenv("CALIBRATION_RETRY_STRIDE", "25"))
 
 CALIBRATION_DIR = os.getenv("CALIBRATION_DIR", "calibrations")
 
+#: Appearance re-association post-pass (player_tracking/reid_merge.py). On by
+#: default: ByteTrack alone hands the same player a new id every time they are
+#: occluded or missed for longer than its buffer, and every per-player metric
+#: keys on player_id, so without this a single player is scored as several
+#: half-players. Set SSC_REID_MERGE=0 to measure the pipeline without it.
+REID_MERGE_ENABLED = os.getenv("SSC_REID_MERGE", "1").strip().lower() not in (
+    "0", "false", "no", "off")
+
 
 
 def _player_checkpoint() -> str:
@@ -116,6 +124,8 @@ class PipelineResult:
     calibration_episodes: int = 0
     detectors_available: tuple = ()
     overlay_render: dict | None = None
+    reid_merge: dict | None = None
+    pitch_coord_coverage: dict | None = None
 
 
 def run_pipeline(db: Session, job: ProcessingJob, timer: PipelineTimer, progress_cb=None) -> PipelineResult:
@@ -143,10 +153,15 @@ def run_pipeline(db: Session, job: ProcessingJob, timer: PipelineTimer, progress
 
     report(15, f"{device_decision.message} Running player detection + ByteTrack tracking...")
     player_ckpt = _player_checkpoint()
+    fps = _estimate_fps(video.storage_path)
     with timer.stage("detection_tracking", detail=f"model={player_ckpt} device={device_decision.device}"):
         frames = _run_detection_and_tracking(
             video.storage_path, player_ckpt, device=device_decision.device
         )
+
+    report(18, "Re-associating tracks that ByteTrack dropped...")
+    with timer.stage("reid_merge"):
+        merge_report = _merge_reidentified_tracks(video.storage_path, frames, fps)
 
     report(20, "Assigning players to teams via jersey-color clustering...")
     with timer.stage("team_assignment"):
@@ -154,18 +169,17 @@ def run_pipeline(db: Session, job: ProcessingJob, timer: PipelineTimer, progress
         team_assignment_confidence = team_result.confidence
 
     report(30, "Running ball/field/goalpost detection + automatic calibration...")
-    fps = _estimate_fps(video.storage_path)
     frame_size = _video_frame_size(video.storage_path)
+    manual_override = _load_manual_calibration(
+        match.match_id, video.id, frame_size=frame_size)
     with timer.stage("frame_synchronisation"):
         frame_data, calib_stats = _build_frame_data(
             video.storage_path, frames, fps,
-            manual_override=_load_manual_calibration(
-                match.match_id, video.id, frame_size=frame_size),
+            manual_override=manual_override,
             device=device_decision.device,
         )
 
     homography_confidence = _representative_confidence(frame_data)
-    H = _representative_homography(frame_data)
 
     report(40, "Recording calibration status...")
     with timer.stage("calibration_history"):
@@ -174,7 +188,8 @@ def run_pipeline(db: Session, job: ProcessingJob, timer: PipelineTimer, progress
     report(45, "Mapping tracked positions to pitch coordinates...")
     with timer.stage("pitch_trajectory"):
         trajectories, ball_trajectory = _build_trajectories(
-            frame_data, frames, match.match_id, H, homography_confidence, fps
+            frame_data, frames, match.match_id, fps,
+            manual_override=manual_override,
         )
 
     with timer.stage("role_inference"):
@@ -279,6 +294,8 @@ def run_pipeline(db: Session, job: ProcessingJob, timer: PipelineTimer, progress
         calibration_episodes=episodes,
         detectors_available=tuple(calib_stats.get("detectors_available", ())),
         overlay_render=overlay.as_dict(),
+        reid_merge=merge_report,
+        pitch_coord_coverage=_pitch_coord_coverage(trajectories),
     )
 
 
@@ -298,6 +315,74 @@ def _run_detection_and_tracking(video_path: str, checkpoint: str,
         return list(track_video(checkpoint, video_path, device=device))
     except FileNotFoundError as exc:
         raise PipelineAssetError(f"Model checkpoint not found: {checkpoint} ({exc})") from exc
+
+
+def _pitch_coord_coverage(trajectories: dict) -> dict:
+    """How much of the tracking actually carries a pitch position, and over
+    how many distinct frames. With per-frame calibration the frame count is
+    the number of frames that solved, rather than the single representative
+    frame the old match-wide matrix effectively stood for."""
+    total = 0
+    with_coords = 0
+    frames_with_coords: set[int] = set()
+    frames_seen: set[int] = set()
+    for points in trajectories.values():
+        for p in points:
+            total += 1
+            frames_seen.add(p.frame_id)
+            if p.pitch_x_m is not None:
+                with_coords += 1
+                frames_with_coords.add(p.frame_id)
+    return {
+        "tracking_points_total": total,
+        "tracking_points_with_pitch_coords": with_coords,
+        "point_coverage": (with_coords / total) if total else 0.0,
+        "frames_with_tracked_players": len(frames_seen),
+        "frames_contributing_pitch_coords": len(frames_with_coords),
+        "frame_coverage": (len(frames_with_coords) / len(frames_seen)) if frames_seen else 0.0,
+    }
+
+
+def _merge_reidentified_tracks(video_path: str, frames, fps: float) -> dict | None:
+    """
+    Runs the appearance re-association post-pass over the MATERIALISED frame
+    list, rewriting det.player_id in place.
+
+    This runs before assign_teams_with_stats() on purpose. reid_merge does
+    its own per-track team clustering for its "same team" gate, so it does
+    not need team_id set; and merging first means team assignment sees whole
+    tracks rather than fragments, and no merged chain can end up holding two
+    different team_ids from having been labelled in two pieces.
+
+    A failure here is not fatal -- unmerged ids are the status quo ante, not
+    a wrong answer -- so it is logged and the run continues.
+    """
+    if not REID_MERGE_ENABLED:
+        logger.info("reid_merge post-pass DISABLED via SSC_REID_MERGE; "
+                    "player ids are raw ByteTrack output")
+        return None
+    if not frames:
+        return None
+
+    try:
+        from ai.computer_vision.player_tracking.reid_merge import merge_reidentified_tracks
+
+        result = merge_reidentified_tracks(video_path, frames, fps=fps)
+    except Exception as exc:  # noqa: BLE001 -- degrade to unmerged ids
+        logger.warning("reid_merge post-pass failed, continuing with raw "
+                       "ByteTrack ids: %s", exc)
+        return None
+
+    report = result.as_dict()
+    logger.info("reid_merge: %d tracks -> %d (%d merges in %d chains); "
+                "rejected %d cross-team, %d across a hard cut; "
+                "%d tracks had no resolvable team and were never merged; "
+                "suppressed %d ghost tracks (%d detections)",
+                result.tracks_before, result.tracks_after, result.merges,
+                result.chains, result.rejected_cross_team,
+                result.rejected_across_cut, result.unresolved_team_tracks,
+                result.ghosts_suppressed, result.ghost_detections_dropped)
+    return report
 
 
 def _load_manual_calibration(match_id: str, video_id: str,
@@ -514,15 +599,12 @@ def _representative_confidence(frame_data: list[FrameData]) -> float:
     return float(vals[len(vals) // 2])
 
 
-def _representative_homography(frame_data: list[FrameData]):
-    """The H of the valid frame whose confidence is closest to the median,
-    for the stages that still take a single per-match matrix. Returns None
-    when no frame was valid -- never a plausible-looking identity matrix."""
-    valid = [f for f in frame_data if f.calibration.valid and f.calibration.H is not None]
-    if not valid:
-        return None
-    target = _representative_confidence(frame_data)
-    return min(valid, key=lambda f: abs(f.calibration.confidence - target)).calibration.H
+# _representative_homography() was removed here. It returned one match-wide
+# matrix for "the stages that still take a single per-match matrix", and
+# _build_trajectories() was the last such stage -- ball and goalpost
+# projection (_build_frame_data) and build_goal_mouths() already work off
+# each frame's own calibration. Leaving a helper that hands out a single
+# matrix for a panning camera is how the drift it caused would come back.
 
 
 def _persist_calibration_status(db: Session, match: Match,
@@ -601,11 +683,35 @@ def _video_frame_size(video_path: str) -> tuple[int, int] | None:
         return None
 
 
-def _build_trajectories(frame_data: list[FrameData], frames, match_id: str, H,
-                        homography_confidence: float, fps: float):
+def _build_trajectories(frame_data: list[FrameData], frames, match_id: str,
+                        fps: float,
+                        manual_override: CalibrationState | None = None):
+    """
+    Projects tracked pixel positions into pitch metres using EACH FRAME'S OWN
+    homography, and assembles the ball's pitch trajectory alongside.
+
+    Automatic calibration is re-solved per frame against a panning broadcast
+    camera, so one match-representative matrix applied to the whole clip
+    would make a stationary player's pitch position drift with the camera --
+    and every time-resolved team metric would then read camera motion as
+    tactical movement. A MANUAL calibration is a single fixed matrix by
+    construction, so that path keeps the single-H behaviour it has always
+    had.
+    """
     from ai.computer_vision.player_tracking.trajectory import enrich_with_pitch_coordinates
 
-    trajectories = enrich_with_pitch_coordinates(frames, match_id, H, homography_confidence, fps)
+    if manual_override is not None:
+        # An invalid manual calibration contributes a confidence of 0.0, not
+        # its raw solve confidence -- the validity gate is the one that saw
+        # the geometry checks, and it must not be bypassed here.
+        manual_confidence = manual_override.confidence if manual_override.valid else 0.0
+        trajectories = enrich_with_pitch_coordinates(
+            frames, match_id, manual_override.H, manual_confidence, fps)
+    else:
+        trajectories = enrich_with_pitch_coordinates(
+            frames, match_id, None, 0.0, fps,
+            calibration_by_frame={f.frame_id: f.calibration for f in frame_data},
+        )
 
     ball_trajectory: list[dict] = []
     for f in frame_data:

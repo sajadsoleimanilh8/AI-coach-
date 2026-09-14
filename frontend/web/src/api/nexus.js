@@ -123,6 +123,18 @@ export const nexus = {
   streamChat,
 
                                                                                                                                                                                                                                                                                                                                                                                           
+  // The LLM coach report for a processed match: tactical read, game plan,
+  // and in-game adjustments. Everything but `narrative` is derived
+  // deterministically upstream, so the UI can render it as measured fact.
+  getCoachReport: (matchId, signal) =>
+    request(`/api/sports/${encodeURIComponent(matchId)}/report`, { signal }),
+
+  getPlayerCoachReport: (matchId, playerId, signal) =>
+    request(
+      `/api/sports/${encodeURIComponent(matchId)}/player/${encodeURIComponent(playerId)}`,
+      { signal },
+    ),
+
   getPsychologyReport: (playerId, matchId, signal) => {
     const params = new URLSearchParams();
     if (matchId) params.set('match_id', matchId);

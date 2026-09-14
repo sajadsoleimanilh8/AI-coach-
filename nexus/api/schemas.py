@@ -344,6 +344,77 @@ class TacticalFindingSchema(BaseModel):
     explanation: str
 
 
+class OpponentWeaknessSchema(BaseModel):
+    """One measured weakness. `supporting_metrics` is what makes the claim
+    auditable — every number in `evidence` came from those metrics."""
+
+    key: str
+    label: str
+    severity: Literal["minor", "moderate", "major"]
+    value: float
+    supporting_metrics: list[str]
+    confidence: str
+    sample_size: int
+    evidence: str
+    zone: str | None = None
+
+
+class OpponentStrengthSchema(BaseModel):
+    key: str
+    label: str
+    value: float
+    supporting_metrics: list[str]
+    confidence: str
+    sample_size: int
+    evidence: str
+
+
+class PrincipleSchema(BaseModel):
+    statement: str
+    grounded_in: str
+    supporting_metrics: list[str]
+
+
+class AdjustmentSchema(BaseModel):
+    """An in-game change. `targets_weakness` names the observed weakness it
+    answers, so no adjustment can be surfaced without a measured reason."""
+
+    instruction: str
+    targets_weakness: str
+    rationale: str
+    supporting_metrics: list[str]
+    priority: int
+
+
+class ProposedShapeSchema(BaseModel):
+    shape: str
+    reason: str
+    supporting_metrics: list[str]
+
+
+class GamePlanSchema(BaseModel):
+    """Derived deterministically from measured metrics — no LLM involved.
+    The narrative on CoachReportResponse explains this; it does not
+    produce it."""
+
+    opponent_strengths: list[OpponentStrengthSchema]
+    opponent_weaknesses: list[OpponentWeaknessSchema]
+    proposed_shape: ProposedShapeSchema | None = None
+    principles: list[PrincipleSchema]
+    adjustments: list[AdjustmentSchema]
+    uncovered_weaknesses: list[str] = []
+    unmeasured_metrics: list[str] = []
+    is_partial: bool = False
+    partial_reason: str = ""
+
+
+class TimelineSectionsSchema(BaseModel):
+    """Which Phase 4 timeline sections backed this report."""
+
+    available: list[str] = []
+    missing: list[str] = []
+
+
 class CoachReportResponse(BaseModel):
     match_id: str
     findings: list[TacticalFindingSchema]
@@ -351,6 +422,12 @@ class CoachReportResponse(BaseModel):
     coverage: float
     narrative: str
     model_used: str
+    game_plan: GamePlanSchema | None = None
+    timeline_sections: TimelineSectionsSchema | None = None
+    is_partial: bool = False
+    # Claims the narrative made that the measured data could not support,
+    # surfaced rather than hidden when a corrective retry did not clear them.
+    narrative_warnings: list[str] = []
 
 
 class PreMatchAssessmentSchema(BaseModel):

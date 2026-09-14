@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node tests/navigation.spec.mjs && node tests/match-selection.spec.mjs && node tests/match-analysis.spec.mjs"
+    "test": "node tests/navigation.spec.mjs && node tests/match-selection.spec.mjs && node tests/match-analysis.spec.mjs && node tests/coach-report.spec.mjs",
+    "test:coach": "node tests/coach-report.spec.mjs"
   },
   "dependencies": {
     "react": "^19.1.0",

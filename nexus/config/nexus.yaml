@@ -9,7 +9,7 @@ local:
   base_url: http://localhost:11434
   request_timeout_seconds: 120
   models:
-    general: mistral:7b
+    general: qwen2.5:3b
     embeddings: nomic-embed-text
 
 memory:

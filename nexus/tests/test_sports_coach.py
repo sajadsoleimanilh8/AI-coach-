@@ -108,8 +108,9 @@ async def test_unavailable_metrics_are_populated_and_reach_the_prompt() -> None:
 
     report = await coach.build_report("m1")
 
-    assert len(report.unavailable_metrics) == 1
-    assert "pressing_intensity_score" in report.unavailable_metrics[0]
+    metric_reasons = [r for r in report.unavailable_metrics if not r.startswith("tactical_timeline.")]
+    assert len(metric_reasons) == 1
+    assert "pressing_intensity_score" in metric_reasons[0]
 
     user_message = next(m for m in provider.received_messages if m.role == "user")
     assert "pressing_intensity_score" in user_message.content

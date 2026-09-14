@@ -126,6 +126,7 @@ def run_one(clip_path: Path, frames: int, workdir: Path, start_frame: int = 0) -
         "calibration_valid_fraction": result.calibration_valid_fraction,
         "calibration_episodes": result.calibration_episodes,
         "detectors_available": list(result.detectors_available),
+        "reid_merge": result.reid_merge,
     })
 
     mid = result.match_id

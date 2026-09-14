@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from nexus.core.exceptions import ProviderUnavailableError
 from nexus.core.router import ModelRouter
 from nexus.core.types import Message, TaskType
+from nexus.logging_setup.logger import get_logger
 from nexus.sports.adapter import SportsDataAdapter, SportsMetric
+from nexus.sports.game_plan import GamePlan, build_game_plan
+from nexus.sports.narrative_guard import audit_narrative
 from nexus.sports.prematch_health import PreMatchAssessment, PreMatchHealthClient
 from nexus.sports.psychology import (
     PsychologyFindings,
@@ -14,14 +17,48 @@ from nexus.sports.psychology import (
 )
 from nexus.sports.psychology_adapter import PsychologyAssessment, PsychologyClient
 from nexus.sports.tactical import TacticalFinding, derive_findings
+from nexus.sports.timeline import TacticalTimeline, timeline_unavailable_reasons
 
 _SYSTEM_PROMPT = (
     "You are a football (soccer) tactical coach assistant. Narrate ONLY the "
-    "findings and unavailable-metric list given to you below — never invent, "
-    "estimate, or infer a value for anything not explicitly provided. Where a "
-    "metric could not be measured, say so plainly and explain why (e.g. low "
-    "upstream tracking confidence); never smooth over a gap with a plausible-"
-    "sounding guess. Keep the tone practical and coach-facing."
+    "findings, game plan, and unavailable-metric list given to you below — "
+    "never invent, estimate, or infer a value for anything not explicitly "
+    "provided. Where a metric could not be measured, say so plainly and "
+    "explain why (e.g. low upstream tracking confidence); never smooth over a "
+    "gap with a plausible-sounding guess. Keep the tone practical and "
+    "coach-facing.\n\n"
+    "Hard rules:\n"
+    "- Every number you write must appear verbatim in the context below. Do "
+    "not compute totals, averages, percentages, differences, or rankings of "
+    "your own, and do not convert between units or scales.\n"
+    "- The tactical read, the shape, the principles of play and the in-game "
+    "adjustments have ALREADY been derived deterministically from the data. "
+    "Explain and prioritise them; do not add adjustments of your own, and do "
+    "not propose a different shape.\n"
+    "- Always state which metrics were unavailable. An unmeasured metric is "
+    "never evidence of a strength, a weakness, or a normal value.\n"
+    "- If the context is marked PARTIAL, open by saying the report is partial "
+    "and why, and keep every conclusion hedged accordingly. Do not write "
+    "confident prose over thin data.\n"
+    "- Describe NO match events and NO chronology. The context holds "
+    "match-wide aggregates, not a running account of what happened. Never "
+    "write about halves, periods, opening or closing spells, what happened "
+    "'as the match progressed', or anything getting better or worse over "
+    "time, unless a 'tactical timeline' section below actually supplies it. "
+    "Inventing a narrative arc is a fabrication even when it quotes no "
+    "number.\n"
+    "- Do not attribute events to either side: no goals, chances, "
+    "breakthroughs, turnovers, substitutions, or passages of play unless "
+    "they appear in the context.\n"
+    "- 'Phase 4' anywhere in this context names a stage of the data "
+    "pipeline, never a period of the match. The 'phases' of a tactical "
+    "timeline are states of play (e.g. build-up, transition), not "
+    "chronological quarters.\n"
+    "- The adjustments are prospective instructions for the next match, not "
+    "changes that were already made during this one. Write them as things to "
+    "do, never as things that were done.\n"
+    "Structure the reply as: Tactical read; Game plan (shape + principles); "
+    "In-game adjustments; What could not be measured."
 )
 
 _PREMATCH_SYSTEM_PROMPT = (
@@ -74,6 +111,21 @@ _PSYCHOLOGY_SYSTEM_PROMPT = (
 )
 
 
+# All three report prompts ask the model to restate values that were already
+# computed, never to reason freely. 0.7 was the generation default and is
+# simply wrong for that: sampling entropy on a grounded narration task buys
+# nothing and is what lets a small model wander into inventing match events
+# (a live qwen2.5:3b produced "in the second half..." and player injuries
+# that appear nowhere in the context). Near-greedy decoding is the correct
+# setting for transcription-shaped work.
+#
+# It lowers the rate of invented claims but does not eliminate them, which
+# is why narrative_guard verifies the output rather than trusting it.
+NARRATION_TEMPERATURE = 0.15
+
+logger = get_logger("sports.coach")
+
+
 def unavailable_reason(metric: SportsMetric) -> str:
     """One human-readable line naming a metric and why it couldn't be used —
     reused by both CoachAssistant and SportsAgent so the phrasing stays
@@ -106,6 +158,15 @@ class CoachReport:
     coverage: float
     narrative: str
     model_used: str
+    game_plan: GamePlan | None = None
+    timeline: TacticalTimeline | None = None
+    # Non-empty when the narrative made claims the data could not support
+    # and a corrective retry did not clear them.
+    narrative_warnings: list[str] = field(default_factory=list)
+
+    @property
+    def is_partial(self) -> bool:
+        return self.game_plan is not None and self.game_plan.is_partial
 
 
 @dataclass
@@ -156,24 +217,88 @@ class CoachAssistant:
             else await self._adapter.get_match_analysis(match_id)
         )
         findings = derive_findings(analysis)
+        game_plan = build_game_plan(analysis)
+
+        # Timeline gaps are unavailable metrics too: without them the coach
+        # would report a match with no measured pressing exactly like a match
+        # where pressing was measured and found absent.
         unavailable_metrics = [unavailable_reason(m) for m in analysis.unavailable]
+        unavailable_metrics += timeline_unavailable_reasons(analysis.timeline)
 
         decision, provider = await self._router.route_with_failover(task_type=TaskType.SPORTS)
 
+        timeline_block = (
+            analysis.timeline.as_prompt_context()
+            if analysis.timeline is not None
+            else "No tactical timeline was served for this match."
+        )
+
         user_content = (
             f"Match {match_id}" + (f", player {player_id}" if player_id is not None else "")
+            + f"\nMetric coverage: {analysis.coverage:.1%}"
+            + (
+                "\nTHIS IS A LOW-COVERAGE MATCH: write an explicitly partial "
+                "report and say what is missing."
+                if game_plan.is_partial
+                else ""
+            )
             + f"\n\nDerived findings:\n{_findings_text(findings)}\n\n"
+            f"Tactical timeline (phases / pressing / transitions / territory):\n"
+            f"{timeline_block}\n\n"
+            f"Game plan (already derived — explain, do not extend):\n"
+            f"{game_plan.as_prompt_context()}\n\n"
             f"Unavailable metrics:\n{_unavailable_text(unavailable_metrics)}\n\n"
-            "Write a short coach report covering the findings above."
+            "Write a short coach report covering the tactical read, the game "
+            "plan, the in-game adjustments, and what could not be measured."
         )
+        messages = [
+            Message(role="system", content=_SYSTEM_PROMPT),
+            Message(role="user", content=user_content),
+        ]
         result = await provider.generate(
-            [
-                Message(role="system", content=_SYSTEM_PROMPT),
-                Message(role="user", content=user_content),
-            ],
-            model_id=decision.model_id,
-            temperature=0.7,
+            messages, model_id=decision.model_id, temperature=NARRATION_TEMPERATURE
         )
+
+        # The prompt asks the model not to invent chronology or events; this
+        # checks whether it complied. A small model complies most of the
+        # time, which is not the same as always, so compliance is verified
+        # rather than assumed. One corrective retry fixes most lapses; if
+        # the second attempt is still unsupported, the narrative is kept but
+        # the report carries an explicit warning -- surfacing a flawed
+        # narrative honestly beats silently shipping it as fact.
+        audit = audit_narrative(result.content, timeline=analysis.timeline)
+        narrative_warnings: list[str] = []
+        if not audit.is_clean:
+            logger.info(
+                "coach narrative for match %s contained unsupported claims %s; retrying",
+                match_id,
+                audit.chronology_claims + audit.event_claims,
+            )
+            retry = await provider.generate(
+                messages
+                + [
+                    Message(role="assistant", content=result.content),
+                    Message(role="user", content=audit.correction_instruction()),
+                ],
+                model_id=decision.model_id,
+                temperature=NARRATION_TEMPERATURE,
+            )
+            retry_audit = audit_narrative(retry.content, timeline=analysis.timeline)
+            if retry_audit.is_clean:
+                result = retry
+            else:
+                # Keep whichever attempt made fewer unsupported claims.
+                if len(retry_audit.warnings) < len(audit.warnings):
+                    result, retry_audit = retry, retry_audit
+                else:
+                    retry_audit = audit
+                narrative_warnings = retry_audit.warnings
+                logger.warning(
+                    "coach narrative for match %s still contained unsupported "
+                    "claims after a corrective retry; returning it flagged: %s",
+                    match_id,
+                    narrative_warnings,
+                )
 
         return CoachReport(
             match_id=match_id,
@@ -182,6 +307,9 @@ class CoachAssistant:
             coverage=analysis.coverage,
             narrative=result.content,
             model_used=result.model_used,
+            game_plan=game_plan,
+            timeline=analysis.timeline,
+            narrative_warnings=narrative_warnings,
         )
 
     async def build_prematch_report(
@@ -214,7 +342,7 @@ class CoachAssistant:
                 Message(role="user", content=user_content),
             ],
             model_id=decision.model_id,
-            temperature=0.7,
+            temperature=NARRATION_TEMPERATURE,
         )
 
         return PreMatchCoachReport(
@@ -256,7 +384,7 @@ class CoachAssistant:
                 Message(role="user", content=user_content),
             ],
             model_id=decision.model_id,
-            temperature=0.7,
+            temperature=NARRATION_TEMPERATURE,
         )
 
         return PsychologyCoachReport(

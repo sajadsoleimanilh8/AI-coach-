@@ -364,9 +364,17 @@ def render_id_overlay(video_path: str,
                 cv2.rectangle(raw, (x1, y1), (x2, y2), colour, 2)
                 label = f"#{det.player_id}"
                 (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-                cv2.rectangle(raw, (x1, y1 - th - 6), (x1 + tw + 4, y1), colour, -1)
-                cv2.putText(raw, label, (x1 + 2, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.6, (0, 0, 0), 2, cv2.LINE_AA)
+                # Keep the tag inside the frame. Drawn unconditionally above
+                # the box it falls off the top edge on any close-up, which is
+                # exactly where identity is hardest to read and most worth
+                # checking; drop it inside the box instead, and clamp x so a
+                # box against the right edge stays legible too.
+                label_top = y1 - th - 6 if y1 - th - 6 >= 0 else y1
+                label_x = min(max(x1, 0), max(width - tw - 6, 0))
+                cv2.rectangle(raw, (label_x, label_top),
+                              (label_x + tw + 4, label_top + th + 6), colour, -1)
+                cv2.putText(raw, label, (label_x + 2, label_top + th + 1),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
             banner = f"frame {frame_number}"
             if frame_number in cut_frames:
                 banner += "  CUT"
@@ -441,6 +449,18 @@ def main() -> int:
         metrics["overlay"] = str(overlay_path) if written else None
         print(f"[eval] overlay: {metrics['overlay']}")
 
+    if merge_report:
+        # The headline ghost figures are what SURVIVED reid_merge. Record what
+        # the tracker itself emitted alongside them, in the JSON and not only
+        # on stdout, so a cached metrics file cannot be read as if suppression
+        # had never happened.
+        raw_tracks = merge_report["tracks_before"]
+        metrics["ghost_tracks_from_tracker"] = merge_report["ghosts_before"]
+        metrics["ghost_track_fraction_from_tracker"] = (
+            round(merge_report["ghosts_before"] / raw_tracks, 4) if raw_tracks else None)
+        metrics["ghost_tracks_suppressed"] = merge_report["ghosts_suppressed"]
+        metrics["ghost_detections_dropped"] = merge_report["ghost_detections_dropped"]
+
     json_path = out_dir / f"metrics_{Path(video_path).stem}_{label}.json"
     json_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
@@ -452,6 +472,12 @@ def main() -> int:
                 "fragmentation_ratio", "ghost_tracks", "ghost_track_fraction",
                 "median_concurrent_players", "ids_per_concurrent_player"):
         print(f"  {key:38s} {metrics.get(key)}")
+    if merge_report:
+        print(f"  {'ghost_tracks_from_tracker':38s} {metrics['ghost_tracks_from_tracker']}"
+              f" ({metrics['ghost_track_fraction_from_tracker']} of "
+              f"{merge_report['tracks_before']} raw tracks)")
+        print(f"  {'ghost_tracks_suppressed':38s} {metrics['ghost_tracks_suppressed']}"
+              f" ({metrics['ghost_detections_dropped']} detections dropped)")
     print(f"[eval] metrics written to {json_path}")
     return 0
 

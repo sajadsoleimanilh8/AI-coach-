@@ -15,22 +15,27 @@ takes, and rewrites `det.player_id` in place, exactly as
 assign_teams_with_stats() rewrites `det.team_id` in place.
 
 HOW A MERGE IS DECIDED
-Every track that dies is held for HOLD_FRAMES frames along with its jersey
+Every track that dies is held for HOLD_SECONDS along with its jersey
 histogram, its last box, and its last velocity. A track born inside that
 window is merged into it only when ALL of these hold:
 
-  * same team          -- the hard constraint. Tracks whose team could not
-                          be resolved (too few usable crops, and every
-                          goalkeeper, whose kit is deliberately unlike
-                          either outfield kit) are never merged at all.
+  * same team          -- the hard constraint. Both tracks must land in the
+                          same jersey cluster; two tracks the clustering
+                          separates are never merged, whatever the rest of
+                          the evidence says. A track with no team at all
+                          (every goalkeeper, whose kit matches neither
+                          outfield cluster, and anything with no usable
+                          crop) is likewise never merged.
   * no hard cut between -- see hard_cut_frames(). Across a shot boundary,
                           position and velocity are meaningless and eleven
                           identically-dressed players are mutually
                           indistinguishable, so association is SUSPENDED
                           rather than guessed.
-  * position agrees    -- the newborn's first box is within MAX_PREDICTION_
-                          DISTANCE_H box-heights of where the dead track was
-                          heading under constant velocity.
+  * position agrees    -- the newborn's first box is close to where the dead
+                          track was heading under constant velocity. The
+                          radius grows with the length of the gap, because
+                          the longer a track has been dead the less its last
+                          velocity says about where its player is now.
   * size agrees        -- box heights within HEIGHT_RATIO_RANGE, which is
                           what stops a near player being merged into a far
                           one.
@@ -63,13 +68,43 @@ PLAYER_CLASSES = (OUTFIELD_CLASS, GOALKEEPER_CLASS)
 
 # --- association gates ------------------------------------------------------
 HOLD_SECONDS = 1.8                 # how long a dead track stays re-associable
-MAX_PREDICTION_DISTANCE_H = 2.0    # box-heights between prediction and newborn
-HEIGHT_RATIO_RANGE = (0.70, 1.45)
+
+# Where the player is allowed to have got to, in box-heights, as a function
+# of how long the track was dead. A fixed radius is wrong in both directions:
+# generous enough for a 45-frame gap it would wave through nonsense at a
+# 3-frame gap, and tight enough for a 3-frame gap it rejects every real
+# re-appearance after a long occlusion. Position uncertainty grows with the
+# gap, so the radius does too -- capped, because past a couple of seconds the
+# prediction carries no information and only the colour evidence is left.
+PREDICTION_BASE_H = 1.5
+PREDICTION_GROWTH_H_PER_FRAME = 0.06
+PREDICTION_MAX_H = 3.5
+
+HEIGHT_RATIO_RANGE = (0.60, 1.70)
 MIN_HISTOGRAM_CORRELATION = 0.50   # cv2.HISTCMP_CORREL over the H/S histogram
+
+# Team labels here are used only to SEPARATE two tracks, never to report a
+# team to anyone. A label that is merely more-likely-this-cluster-than-the
+# -other is enough to answer "are these two the same side?", whereas
+# TEAM_ASSIGNMENT_CONFIDENCE_MIN is the (much higher) bar for writing a team
+# onto a detection. Holding the merge gate to the reporting bar just means a
+# third of all tracks become permanently unmergeable. The colour evidence
+# that a merge actually rests on is MIN_HISTOGRAM_CORRELATION, which is an
+# independent, direct comparison of the two kits.
+TEAM_SEPARATION_CONFIDENCE_MIN = 0.0
 VELOCITY_SAMPLE = 5                # frames averaged into the velocity estimate
 VELOCITY_MAX_PX = 40.0             # per-frame clamp, so a jittery final box
                                    # cannot fling the prediction across the pitch
 APPEARANCE_CROPS = 12              # crops sampled per track for its histogram
+
+# A track this short is not a player, it is noise: trajectory.py needs two
+# points to produce a distance, three to produce an acceleration, so a
+# one- or two-frame id contributes nothing but an empty row to
+# players_tracked and to the PlayerMetric table while consuming an id.
+# Suppression happens AFTER re-association, so a short fragment that is
+# really the tail of a real track gets absorbed rather than deleted; only
+# what is still orphaned at the end is dropped. Set 0 to keep everything.
+MIN_TRACK_FRAMES = 3
 
 # --- jersey histogram -------------------------------------------------------
 HIST_HUE_BINS = 24
@@ -133,6 +168,9 @@ class MergeResult:
     rejected_cross_team: int = 0
     rejected_across_cut: int = 0
     unresolved_team_tracks: int = 0
+    ghosts_before: int = 0
+    ghosts_suppressed: int = 0
+    ghost_detections_dropped: int = 0
     merged_pairs: list[tuple[int, int]] = field(default_factory=list)
 
     def as_dict(self) -> dict:
@@ -145,6 +183,9 @@ class MergeResult:
             "rejected_cross_team": self.rejected_cross_team,
             "rejected_across_cut": self.rejected_across_cut,
             "unresolved_team_tracks": self.unresolved_team_tracks,
+            "ghosts_before": self.ghosts_before,
+            "ghosts_suppressed": self.ghosts_suppressed,
+            "ghost_detections_dropped": self.ghost_detections_dropped,
         }
 
 
@@ -174,14 +215,25 @@ def _frame_histogram(frame_bgr: np.ndarray) -> np.ndarray:
 
 
 def _jersey_histogram(pixels: np.ndarray) -> np.ndarray:
-    """Normalised hue/saturation histogram of one crop's jersey pixels."""
+    """Hue/saturation histogram of one crop's jersey pixels, summing to 1.
+
+    Normalising PER CROP is what makes a track's signature mean "this kit"
+    rather than "this kit, mostly as it looked when the player was nearest
+    the camera". A near box carries thousands of jersey pixels and a distant
+    one a few dozen, so accumulating raw counts across a track lets its
+    largest crops outvote the rest by two orders of magnitude -- and the
+    merge gate then compares a dying far-away track against a newborn near
+    one on signatures built at different scales. One crop, one vote.
+    """
     hs = pixels[:, :2].astype(np.float32)
     hist, _, _ = np.histogram2d(
         hs[:, 0], hs[:, 1],
         bins=(HIST_HUE_BINS, HIST_SAT_BINS),
         range=((0.0, 180.0), (0.0, 256.0)),
     )
-    return hist.astype(np.float32)
+    hist = hist.astype(np.float32)
+    total = float(hist.sum())
+    return hist / total if total > 0 else hist
 
 
 def hard_cut_frames(video_path: str, n_frames: int) -> set[int]:
@@ -301,7 +353,19 @@ def _resolve_teams(tracks: dict[int, _Track],
     """
     outfield = {track_id: feats for track_id, feats in team_features.items()
                 if not tracks[track_id].is_goalkeeper}
-    return resolve_track_teams(outfield)
+    return resolve_track_teams(outfield, confidence_min=TEAM_SEPARATION_CONFIDENCE_MIN)
+
+
+def _born_within(births: dict[int, list[int]], died_on: int, hold_frames: int):
+    """Track ids born in (died_on, died_on + hold_frames], ascending.
+
+    Ascending by birth frame and then by id, so candidate generation order is
+    fixed for a given input -- the final sort is by (cost, a_id, b_id) anyway,
+    but a stable order here keeps the diagnostic counters reproducible too.
+    """
+    for frame in range(died_on + 1, died_on + hold_frames + 1):
+        for track_id in births.get(frame, ()):
+            yield track_id
 
 
 def _candidate_merges(tracks: dict[int, _Track],
@@ -314,6 +378,17 @@ def _candidate_merges(tracks: dict[int, _Track],
 
     def cut_between(a_last: int, b_first: int) -> bool:
         return any(a_last < c <= b_first for c in sorted_cuts)
+
+    # Only tracks BORN in (a.last, a.last + hold_frames] can pair with a track
+    # that died at a.last, so index by birth frame instead of rescanning every
+    # track for every track. The pairs considered are identical -- the old
+    # inner loop reached the same set via `continue` -- but the cost stops
+    # being quadratic in track count, which is what a full 90-minute upload
+    # actually has (thousands of tracks, not the couple of hundred in a
+    # 60-second eval clip).
+    births: dict[int, list[int]] = {}
+    for track_id in sorted(tracks):
+        births.setdefault(tracks[track_id].first, []).append(track_id)
 
     candidates: list[tuple[float, int, int]] = []
     for a_id in sorted(tracks):
@@ -330,13 +405,11 @@ def _candidate_merges(tracks: dict[int, _Track],
         vx, vy = a.velocity()
         ax, ay = a.centre(a.last)
 
-        for b_id in sorted(tracks):
+        for b_id in _born_within(births, a.last, hold_frames):
             if b_id == a_id:
                 continue
             b = tracks[b_id]
             gap = b.first - a.last
-            if gap < 1 or gap > hold_frames:
-                continue
 
             b_team = teams.get(b_id)
             if b_team is None:
@@ -356,7 +429,9 @@ def _candidate_merges(tracks: dict[int, _Track],
 
             bx, by = b.centre(b.first)
             distance = float(np.hypot(bx - (ax + vx * gap), by - (ay + vy * gap))) / a_h
-            if distance > MAX_PREDICTION_DISTANCE_H:
+            allowed = min(PREDICTION_BASE_H + PREDICTION_GROWTH_H_PER_FRAME * gap,
+                          PREDICTION_MAX_H)
+            if distance > allowed:
                 continue
 
             b_hist = histograms.get(b_id)
@@ -366,7 +441,7 @@ def _candidate_merges(tracks: dict[int, _Track],
             if correlation < MIN_HISTOGRAM_CORRELATION:
                 continue
 
-            cost = distance / MAX_PREDICTION_DISTANCE_H + (1.0 - correlation)
+            cost = distance / allowed + (1.0 - correlation)
             candidates.append((cost, a_id, b_id))
 
     candidates.sort(key=lambda c: (round(c[0], 9), c[1], c[2]))
@@ -376,20 +451,35 @@ def _candidate_merges(tracks: dict[int, _Track],
 def merge_reidentified_tracks(video_path: str,
                               frames: list[list[TrackedDetection]],
                               fps: float = 25.0,
-                              hold_seconds: float = HOLD_SECONDS) -> MergeResult:
+                              hold_seconds: float = HOLD_SECONDS,
+                              min_track_frames: int = MIN_TRACK_FRAMES) -> MergeResult:
     """
     Merge re-appearing players back onto their original id, IN PLACE.
 
     `frames` is the materialised output of tracker.track_video(). Every
     merged detection's player_id is rewritten to the lowest id in its chain,
     so ids stay stable and a re-run over the same video reproduces them
-    exactly.
+    exactly. Tracks still shorter than `min_track_frames` afterwards are
+    dropped from `frames` entirely -- see MIN_TRACK_FRAMES.
     """
     result = MergeResult()
     tracks = _summarise(frames)
     result.tracks_before = len(tracks)
     result.tracks_after = len(tracks)
+    # Counted at the threshold that will actually be applied, so
+    # ghosts_suppressed can never exceed ghosts_before. When suppression is
+    # switched off the module default stands in, because "how many ghosts did
+    # the tracker emit" is precisely the diagnostic you want when measuring
+    # the pipeline WITHOUT suppression -- counting against 0 would report
+    # zero ghosts exactly then.
+    ghost_threshold = min_track_frames if min_track_frames > 0 else MIN_TRACK_FRAMES
+    result.ghosts_before = sum(1 for t in tracks.values()
+                               if len(t.frames) < ghost_threshold)
     if len(tracks) < 2:
+        # Nothing to associate, but a lone track can still be a one-frame
+        # ghost and the caller asked for those to be suppressed.
+        if min_track_frames > 0:
+            _suppress_ghosts(frames, min_track_frames, result)
         return result
 
     cuts, histograms, team_features = _scan_video(video_path, frames, tracks)
@@ -435,7 +525,36 @@ def merge_reidentified_tracks(video_path: str,
                 if det.class_name in PLAYER_CLASSES:
                     det.player_id = canonical.get(det.player_id, det.player_id)
 
+    if min_track_frames > 0:
+        _suppress_ghosts(frames, min_track_frames, result)
+
     return result
+
+
+def _suppress_ghosts(frames: list[list[TrackedDetection]],
+                     min_track_frames: int,
+                     result: MergeResult) -> None:
+    """Drop the tracks that are still too short to mean anything, in place."""
+    lengths: dict[int, int] = {}
+    for detections in frames:
+        for det in detections:
+            if det.class_name in PLAYER_CLASSES:
+                lengths[det.player_id] = lengths.get(det.player_id, 0) + 1
+
+    doomed = {track_id for track_id, count in lengths.items() if count < min_track_frames}
+    if not doomed:
+        return
+
+    dropped = 0
+    for detections in frames:
+        keep = [det for det in detections
+                if det.class_name not in PLAYER_CLASSES or det.player_id not in doomed]
+        dropped += len(detections) - len(keep)
+        detections[:] = keep
+
+    result.ghosts_suppressed = len(doomed)
+    result.ghost_detections_dropped = dropped
+    result.tracks_after -= len(doomed)
 
 
 def merged_track_ids(frames: Iterable[list[TrackedDetection]]) -> set[int]:

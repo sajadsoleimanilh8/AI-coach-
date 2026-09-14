@@ -155,3 +155,108 @@ def test_to_status_reads_status_not_state():
 def test_to_status_prefers_error_over_message_for_detail():
     s = _to_status(_status_response("failed", 10, error="boom"), fallback_match_id="")
     assert s.detail == "boom"
+
+
+class _ExplodingCoach:
+    """A coach that always fails — stands in for a provider outage, a router
+    with no model, or a bug in report building."""
+
+    def __init__(self, exc: Exception | None = None) -> None:
+        self.calls = 0
+        self._exc = exc or RuntimeError("provider is down")
+
+    async def build_report(self, match_id: str, player_id: int | None = None):
+        self.calls += 1
+        raise self._exc
+
+
+@pytest.mark.asyncio
+async def test_coach_failure_after_processing_never_fails_the_job():
+    """The coach runs downstream of processing, so its failure must surface
+    as "no report" rather than turning a completed job into a failed one."""
+    coach = _ExplodingCoach()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_status_response("completed", 100))
+
+    report = await _service(handler, coach).coach_report_after_processing(
+        job_id="job-1", match_id="match-1")
+
+    assert report is None
+    assert coach.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_unavailable_after_processing_is_swallowed_too():
+    coach = _ExplodingCoach(ProviderUnavailableError("no model available"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_status_response("completed", 100))
+
+    assert await _service(handler, coach).coach_report_after_processing(
+        job_id="job-1", match_id="match-1") is None
+
+
+@pytest.mark.asyncio
+async def test_no_coach_report_is_built_for_a_failed_job():
+    coach = _StubCoach()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_status_response("failed", 30, error="pipeline died"))
+
+    report = await _service(handler, coach).coach_report_after_processing(
+        job_id="job-1", match_id="match-1")
+
+    assert report is None
+    assert coach.calls == []
+
+
+@pytest.mark.asyncio
+async def test_coach_report_after_processing_returns_the_report_on_success():
+    coach = _StubCoach()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_status_response("completed", 100))
+
+    report = await _service(handler, coach).coach_report_after_processing(
+        job_id="job-1", match_id="match-1", player_id=9)
+
+    assert report is not None
+    assert report.narrative == "stub narrative"
+    assert coach.calls == [("match-backend-assigned", 9)]
+
+
+@pytest.mark.asyncio
+async def test_a_stuck_job_yields_no_report_rather_than_raising():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_status_response("processing", 50))
+
+    service = VideoAnalysisService(
+        "http://backend.test", _StubCoach(),
+        poll_interval_seconds=0.0, max_wait_seconds=0.0,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert await service.coach_report_after_processing(
+        job_id="job-1", match_id="match-1") is None
+
+
+@pytest.mark.asyncio
+async def test_analyze_upload_posts_bytes_and_returns_a_report():
+    coach = _StubCoach()
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/videos/upload":
+            seen["body"] = request.content
+            seen["content_type"] = request.headers.get("content-type", "")
+            return httpx.Response(201, json=UPLOAD_RESPONSE)
+        return httpx.Response(200, json=_status_response("completed", 100))
+
+    report = await _service(handler, coach).analyze_upload(
+        filename="clip.mp4", content=b"raw-upload-bytes", match_id="requested-id", player_id=3)
+
+    assert seen["content_type"].startswith("multipart/form-data")
+    assert b"raw-upload-bytes" in seen["body"]
+    assert coach.calls == [("match-backend-assigned", 3)]
+    assert report.match_id == "match-backend-assigned"

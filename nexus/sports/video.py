@@ -73,15 +73,33 @@ class VideoAnalysisService:
                 "fetch remote media to disk before calling analyze()."
             )
 
-        content_type = mimetypes.guess_type(source.name)[0] or "video/mp4"
+        with source.open("rb") as handle:
+            return await self.submit_file(
+                filename=source.name,
+                content=handle.read(),
+                match_id=match_id,
+                content_type=mimetypes.guess_type(source.name)[0] or "video/mp4",
+            )
+
+    async def submit_file(
+        self,
+        *,
+        filename: str,
+        content: bytes,
+        match_id: str,
+        content_type: str | None = None,
+    ) -> VideoJobStatus:
+        """Uploads bytes already in hand — the path taken when a client POSTs
+        a multipart file to nexus rather than naming a file on the backend's
+        own disk."""
+        resolved_type = content_type or mimetypes.guess_type(filename)[0] or "video/mp4"
         async with self._client() as client:
             try:
-                with source.open("rb") as handle:
-                    response = await client.post(
-                        "/api/videos/upload",
-                        files={"file": (source.name, handle, content_type)},
-                        data={"metadata": json.dumps({"requested_match_id": match_id})},
-                    )
+                response = await client.post(
+                    "/api/videos/upload",
+                    files={"file": (filename, content, resolved_type)},
+                    data={"metadata": json.dumps({"requested_match_id": match_id})},
+                )
                 response.raise_for_status()
             except httpx.HTTPError as exc:
                 raise ProviderUnavailableError(
@@ -96,6 +114,38 @@ class VideoAnalysisService:
                     status.match_id, match_id,
                 )
             return status
+
+    async def analyze_upload(
+        self,
+        *,
+        filename: str,
+        content: bytes,
+        match_id: str,
+        player_id: int | None = None,
+        content_type: str | None = None,
+    ) -> CoachReport:
+        """Full path for an uploaded file: submit -> poll -> CoachReport."""
+        submitted = await self.submit_file(
+            filename=filename, content=content, match_id=match_id, content_type=content_type
+        )
+        resolved_match_id = submitted.match_id or match_id
+
+        final = (
+            submitted
+            if submitted.is_terminal
+            else await self.wait_for_completion(submitted.job_id, match_id=resolved_match_id)
+        )
+        if final.state == "failed":
+            raise ProviderUnavailableError(
+                f"Video processing failed for match {resolved_match_id}: "
+                f"{final.detail or 'no detail reported by the backend'}"
+            )
+
+        logger.info(
+            "uploaded video job %s completed for match %s; building coach report",
+            final.job_id, resolved_match_id,
+        )
+        return await self._coach_assistant.build_report(resolved_match_id, player_id)
 
     async def status(self, job_id: str) -> VideoJobStatus:
         async with self._client() as client:
@@ -152,6 +202,48 @@ class VideoAnalysisService:
             resolved_match_id,
         )
         return await self._coach_assistant.build_report(resolved_match_id, player_id)
+
+    async def coach_report_after_processing(
+        self, *, job_id: str, match_id: str, player_id: int | None = None
+    ) -> CoachReport | None:
+        """Build the coach report for an ALREADY-SUBMITTED job, never raising.
+
+        This is the post-processing hook: processing has its own lifecycle in
+        the backend, and the coaching layer sits downstream of it. A provider
+        outage, a router with no model, or a bug in report building must
+        therefore surface as "no report yet" — never as a failed video job.
+
+        Returns None on any failure, having logged the reason. Callers that
+        want the error should use analyze() instead.
+        """
+        try:
+            final = await self.wait_for_completion(job_id, match_id=match_id)
+        except ProviderUnavailableError as exc:
+            logger.warning(
+                "coach report skipped for match %s: job %s never reached a "
+                "terminal state (%s)", match_id, job_id, exc,
+            )
+            return None
+
+        if final.state != "completed":
+            logger.info(
+                "coach report skipped for match %s: job %s ended in state %s (%s)",
+                match_id, job_id, final.state, final.detail or "no detail",
+            )
+            return None
+
+        resolved_match_id = final.match_id or match_id
+        try:
+            return await self._coach_assistant.build_report(resolved_match_id, player_id)
+        except Exception:
+            # Deliberately broad: this runs after processing has already
+            # succeeded, so nothing raised here should retroactively turn a
+            # completed job into a failed one.
+            logger.exception(
+                "coach report failed for match %s (job %s); the processing job "
+                "is unaffected", resolved_match_id, job_id,
+            )
+            return None
 
 
 def _to_status(payload: Any, *, fallback_match_id: str) -> VideoJobStatus:

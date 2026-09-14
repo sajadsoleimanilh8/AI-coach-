@@ -13,6 +13,7 @@ from nexus.generation.service import PersonalizedPlan
 from nexus.health.analyzer import HealthAnalysis, HealthPattern
 from nexus.sports.adapter import MatchAnalysis, SportsDataAdapter, SportsMetric
 from nexus.sports.coach import CoachReport
+from nexus.sports.game_plan import build_game_plan
 from nexus.sports.tactical import TacticalFinding
 
 
@@ -54,9 +55,23 @@ class _FakeGenerator:
         )
 
 
+def _game_plan_analysis() -> MatchAnalysis:
+    """Enough real metrics for build_game_plan to produce a full plan, so
+    the route's game-plan serialisation is exercised against a real
+    GamePlan rather than a hand-written stand-in."""
+    team = [
+        SportsMetric("compactness_score", 80.0, "deterministic", "normal", 50, {}),
+        SportsMetric("formation_stability_score", 22.0, "deterministic", "normal", 40, {}),
+    ]
+    return MatchAnalysis(
+        match_id="m1", team_metrics=team, player_metrics=[], unavailable=[], coverage=0.5
+    )
+
+
 class _FakeCoachAssistant:
     async def build_report(self, match_id: str, player_id: int | None = None) -> CoachReport:
         return CoachReport(
+            game_plan=build_game_plan(_game_plan_analysis()),
             match_id=match_id,
             findings=[
                 TacticalFinding(
@@ -167,6 +182,27 @@ async def test_sports_match_report_endpoint_is_well_formed(client: AsyncClient) 
     assert "pressing_intensity_score" in body["unavailable_metrics"][0]
     assert body["coverage"] == 0.5
     assert body["narrative"]
+
+    # The game plan is the part a coach acts on, so the route must serialise
+    # it whole -- shape, principles, and adjustments still tied to a named
+    # weakness once they have crossed the wire.
+    plan = body["game_plan"]
+    assert plan is not None
+    assert plan["proposed_shape"]["shape"] == "3-4-3"
+    assert plan["opponent_weaknesses"][0]["key"] == "formation_stability_score"
+    assert plan["opponent_strengths"][0]["key"] == "compactness_score"
+    assert plan["principles"] and plan["adjustments"]
+    weakness_labels = {w["label"] for w in plan["opponent_weaknesses"]}
+    for adjustment in plan["adjustments"]:
+        assert adjustment["targets_weakness"] in weakness_labels
+        assert adjustment["supporting_metrics"]
+
+    # A missing Phase 4 timeline must be reported as missing, not omitted.
+    assert body["timeline_sections"]["available"] == []
+    assert set(body["timeline_sections"]["missing"]) == {
+        "phases", "pressing", "transitions", "territory"
+    }
+    assert body["is_partial"] is True
 
 
 @pytest.mark.asyncio
