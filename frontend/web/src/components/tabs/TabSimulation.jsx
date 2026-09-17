@@ -19,7 +19,16 @@ import { EmptyState, ErrorState, LoadingState } from '../ui/States.jsx';
 import { SelectMatchState } from '../ui/MatchPicker.jsx';
 import { NumberField, SelectField, SubmitButton } from '../ui/Form.jsx';
 
-                                                                                                                                                                                                                                                                                                                                                                                                                                                           
+/**
+ * TAB 5 -- the what-if tactical simulator.
+ *
+ * The single most important thing this tab does is refuse to read as an
+ * outcome predictor. The endpoint returns method: "heuristic_proxy" and
+ * is_reinforcement_learning: false alongside a `caveats` list, and all three
+ * are rendered above the numbers, not tucked under them. A deltas table with
+ * the caveats hidden would be a more misleading artefact than no simulator at
+ * all.
+ */
 
 const KINDS = [
   { value: 'compactness', label: 'Compactness', needs: ['team', 'pct'] },
@@ -47,8 +56,8 @@ export default function TabSimulation({ matchId, jobId, goToTab, onAttachMatch }
   const [interventions, setInterventions] = useState(() => [blankIntervention()]);
   const simulation = useAction((payload, signal) => api.runSimulation(matchId, payload, signal));
 
-                                                                       
-                                                                             
+  // A one-shot read, not a poll: this only decides whether to show the
+  // "needs a completed pipeline run" gate before the user builds a scenario.
   const job = useAsync(
     (signal) => api.getProcessingStatus(jobId, signal),
     [jobId],
@@ -82,7 +91,7 @@ export default function TabSimulation({ matchId, jobId, goToTab, onAttachMatch }
   useEffect(() => {
     simulation.reset();
     setInterventions([blankIntervention()]);
-                                                           
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchId]);
 
   const update = (key, patch) => {
@@ -204,7 +213,7 @@ export default function TabSimulation({ matchId, jobId, goToTab, onAttachMatch }
   );
 }
 
-                                                                            
+/** Rendered before any result exists, so the framing never arrives late. */
 function MethodBanner() {
   return (
     <Slab className="dash-method-banner">
@@ -301,7 +310,12 @@ function InterventionRow({ index, item, teamOptions, playerOptions, canRemove, o
   );
 }
 
-                                                                                                                                                                                                                                                                                                                 
+/**
+ * A select when a roster exists, a number box when it does not. The roster
+ * comes from PlayerMetric rows, which will not exist for a match whose
+ * intelligence stage has not run -- but tracking rows (what the simulator
+ * actually reads) may exist anyway, so typing an ID has to stay possible.
+ */
 function PlayerPicker({ label, value, options, onChange }) {
   const hasRoster = options.length > 1;
   if (hasRoster) {
@@ -327,7 +341,7 @@ function PlayerPicker({ label, value, options, onChange }) {
   );
 }
 
-                                                                          
+/* ==================================================================== */
 
 function SimulationResult({ data }) {
   return (
@@ -458,7 +472,10 @@ function SimulatedMetricCard({ number, metric }) {
   );
 }
 
-                                                                                                                                                            
+/**
+ * The real, persisted metrics the simulation started from. Shown because a
+ * delta is meaningless without the measurement it was computed against.
+ */
 function RealInputs({ metrics }) {
   if (!metrics || !metrics.length) {
     return (

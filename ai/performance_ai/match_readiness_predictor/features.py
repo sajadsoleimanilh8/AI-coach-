@@ -1,5 +1,22 @@
 """
 Questionnaire -> normalized feature vector.
+
+Pure functions, no state, no I/O. Every feature is bounded 0-100 (the same
+range the three headline scores use) so a future ML/DL model can consume this
+exact vector without a rewrite, and so a human can read any single number
+without needing to know which scale it happens to be on.
+
+Direction matters and is NOT uniform: `hydration_score` is "higher is better"
+while `muscle_soreness` is "higher is worse". Rather than silently flipping
+some inputs to make them all point the same way (which would make the stored
+feature vector disagree with the questionnaire it came from), each feature
+keeps the direction its underlying question has, and FEATURE_DIRECTIONS
+below states that direction explicitly for every one of them. The scorer
+inverts where it needs to.
+
+What is deliberately NOT a feature: caffeine_or_supplement_notes, or any
+other free text. It never enters this module's output, so it cannot reach the
+scoring layer. It travels separately, verbatim, on the API response.
 """
 
 from __future__ import annotations
@@ -58,34 +75,45 @@ FEATURE_DIRECTIONS: dict[str, str] = {
 
 @dataclass(frozen=True)
 class PreMatchFeatures:
-    """Normalized 0-100 model inputs derived from one questionnaire."""
+    """Normalized 0-100 model inputs derived from one questionnaire.
 
-    sleep_duration: float
-    sleep_quality: float
-    sleep_awakenings_score: float
-    sleep_score: float
-    sleep_debt: float
+    These are inputs only. The three headline scores the spec also names as
+    features -- fatigue_score, recovery_score, physical_readiness -- are
+    computed by the scorer (scorer.py), not here, because they are that
+    layer's *outputs*: a future MLReadinessScorer would consume this vector
+    and produce those, so baking them in here would make the input and the
+    prediction the same object. They rejoin this vector in
+    HealthAssessment.to_feature_vector(), which is what the API's
+    /features endpoint serves, so the full named set is still stored and
+    retrievable in one place.
+    """
 
-    training_duration: float
-    training_intensity: float
-    session_load: float
-    training_recency_factor: float
-    recent_training_load: float
-    high_intensity_load: float
+    sleep_duration: float  # hours against SLEEP_TARGET_HOURS
+    sleep_quality: float  # 1-10 self-rating -> 0-100
+    sleep_awakenings_score: float  # penalty-based, 100 = undisturbed
+    sleep_score: float  # weighted composite of the three above
+    sleep_debt: float  # 100 - sleep_score
+
+    training_duration: float  # minutes against a full-load session
+    training_intensity: float  # 1-10 self-rating -> 0-100
+    session_load: float  # duration+intensity of the last session
+    training_recency_factor: float  # 0-100: how much of it still counts as recent
+    recent_training_load: float  # session_load scaled by recency (+ HI bonus)
+    high_intensity_load: float  # sprint/HI work, recency-scaled
 
     trained_last_24h_flag: float
     trained_last_48h_flag: float
     high_intensity_flag: float
 
-    self_reported_fatigue: float
-    muscle_soreness: float
-    pain_level: float
-    perceived_readiness: float
+    self_reported_fatigue: float  # 1-10 -> 0-100, higher = more fatigued
+    muscle_soreness: float  # 1-10 -> 0-100, higher = more sore
+    pain_level: float  # 1-10 -> 0-100, higher = more pain
+    perceived_readiness: float  # 1-10 -> 0-100, higher = feels readier
 
-    hydration_score: float
-    nutrition_quality: float
-    meal_timing_score: float
-    nutrition_score: float
+    hydration_score: float  # litres against HYDRATION_TARGET_LITERS
+    nutrition_quality: float  # 1-10 -> 0-100
+    meal_timing_score: float  # hours_since_last_meal -> 0-100
+    nutrition_score: float  # weighted composite of the two above
 
     time_in_bed_hours: float | None = None
     sleep_efficiency_pct: float | None = None
@@ -95,7 +123,12 @@ class PreMatchFeatures:
 
 
 def _time_in_bed_hours(bedtime: time | None, wake_time: time | None) -> float | None:
-    """Clock hours between bedtime and wake_time, wrapping past midnight."""
+    """Clock hours between bedtime and wake_time, wrapping past midnight.
+
+    Returns None when either time is missing, or when the two are identical
+    -- that reads as either 0h or 24h in bed and there is no basis for
+    picking one, so it stays unmeasured rather than becoming a guess.
+    """
     if bedtime is None or wake_time is None:
         return None
     bed_minutes = bedtime.hour * 60 + bedtime.minute
@@ -107,14 +140,25 @@ def _time_in_bed_hours(bedtime: time | None, wake_time: time | None) -> float | 
 
 
 def _sleep_efficiency_pct(sleep_hours: float, in_bed_hours: float | None) -> float | None:
-    """Reported sleep as a percentage of time in bed, capped at 100."""
+    """Reported sleep as a percentage of time in bed, capped at 100.
+
+    Values over 100 mean the player reported sleeping longer than they were
+    in bed -- self-report noise, not a real reading -- so the cap keeps it
+    at 100 rather than surfacing an impossible percentage.
+    """
     if in_bed_hours is None or in_bed_hours <= 0:
         return None
     return round(clamp(100.0 * sleep_hours / in_bed_hours), 1)
 
 
 def _meal_timing_score(hours_since_last_meal: float) -> float:
-    """0-100 on how well-timed the last meal is for an upcoming match."""
+    """0-100 on how well-timed the last meal is for an upcoming match.
+
+    Inside [1.5h, 4h] scores 100. Below that it drops linearly to
+    MEAL_TIMING_RECENT_FLOOR at 0h (eaten just now -- digestion, not a
+    deficiency, hence a floor rather than a zero). Above it, it falls
+    linearly at MEAL_TIMING_LATE_PENALTY_PER_HOUR to 0 (long fast).
+    """
     if hours_since_last_meal < MEAL_TIMING_IDEAL_MIN_HOURS:
         span = 100.0 - MEAL_TIMING_RECENT_FLOOR
         return clamp(
@@ -128,7 +172,22 @@ def _meal_timing_score(hours_since_last_meal: float) -> float:
 
 
 def _training_recency_factor(q: PreMatchQuestionnaireInput) -> float:
-    """0.0-1.0: how much of the last session's load still counts as "recent"."""
+    """0.0-1.0: how much of the last session's load still counts as "recent".
+
+    Two independent signals, combined with min() so the more conservative
+    one wins:
+      * the trained_last_24h / trained_last_48h flags (1.0 / 0.6 / 0.0), and
+      * a linear decay on hours_since_last_training, reaching 0 at
+        TRAINING_RECENCY_DECAY_HOURS.
+    Taking the minimum means load is monotonically non-increasing in
+    hours_since_last_training, as the spec requires, and that a player who
+    ticks trained_last_24h but reports 40 hours since training gets the
+    honest (lower) number rather than the flag's optimistic one.
+
+    With neither flag set, this is 0.0 and recent_training_load collapses to
+    0 regardless of the duration/intensity answers -- correct: those describe
+    a session that is no longer recent.
+    """
     if q.trained_last_24h:
         flag_factor = 1.0
     elif q.trained_last_48h:

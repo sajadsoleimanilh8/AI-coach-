@@ -20,7 +20,7 @@ class ToolResult:
 class Tool(ABC):
     name: str
     description: str
-    parameters_schema: dict[str, Any]
+    parameters_schema: dict[str, Any]  # JSON schema for the "parameters" field
 
     @abstractmethod
     async def execute(self, arguments: dict[str, Any]) -> ToolResult:

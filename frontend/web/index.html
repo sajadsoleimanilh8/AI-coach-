@@ -4,988 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SportsStrategyCoachAI — Tactical Intelligence</title>
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Space+Grotesk:wght@300;400;500&family=JetBrains+Mono:wght@300;400&display=swap');
-
-    
-    :root {
-      --neon-blue: #00d4ff;
-      --neon-purple: #8b5cf6;
-      --neon-pink: #f472b6;
-      --dark-bg: #020408;
-      --dark-surface: #060d1a;
-      --dark-card: #0a1628;
-      --text-primary: #e2e8f0;
-      --text-muted: #64748b;
-      --grid-color: rgba(0, 212, 255, 0.04);
-      --glow-blue: rgba(0, 212, 255, 0.3);
-      --glow-purple: rgba(139, 92, 246, 0.3);
-    }
-
-    
-    *,
-    *::before,
-    *::after {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    html {
-      scroll-behavior: smooth;
-    }
-
-    body {
-      background: var(--dark-bg);
-      color: var(--text-primary);
-      font-family: 'Space Grotesk', sans-serif;
-      overflow-x: hidden;
-      cursor: default;
-    }
-
-    section {
-      position: relative;
-      z-index: 2;
-    }
-
-    a:focus-visible,
-    button:focus-visible {
-      outline: 2px solid var(--neon-blue);
-      outline-offset: 3px;
-    }
-
-    .text-accent-blue {
-      color: var(--neon-blue);
-    }
-
-    .text-accent-purple {
-      color: var(--neon-purple);
-    }
-
-    
-    .cursor {
-      position: fixed;
-      width: 12px;
-      height: 12px;
-      background: var(--neon-blue);
-      border-radius: 50%;
-      pointer-events: none;
-      z-index: 9999;
-      transform: translate(-50%, -50%);
-      transition: transform 0.1s, width 0.2s, height 0.2s, opacity 0.2s;
-      mix-blend-mode: screen;
-    }
-
-    .cursor-ring {
-      position: fixed;
-      width: 36px;
-      height: 36px;
-      border: 1px solid rgba(0, 212, 255, 0.5);
-      border-radius: 50%;
-      pointer-events: none;
-      z-index: 9998;
-      transform: translate(-50%, -50%);
-      transition: all 0.15s ease-out;
-    }
-
-    body:hover .cursor {
-      opacity: 1;
-    }
-
-    
-    .noise {
-      position: fixed;
-      inset: 0;
-      z-index: 3;
-      pointer-events: none;
-      opacity: 0.025;
-      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-      background-size: 180px;
-    }
-
-    .grid-bg {
-      position: fixed;
-      inset: 0;
-      z-index: 0;
-      background-image:
-        linear-gradient(var(--grid-color) 1px, transparent 1px),
-        linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
-      background-size: 60px 60px;
-      pointer-events: none;
-    }
-
-    .scanlines {
-      position: fixed;
-      inset: 0;
-      z-index: 1;
-      background: repeating-linear-gradient(
-        0deg,
-        transparent,
-        transparent 2px,
-        rgba(0, 0, 0, 0.03) 2px,
-        rgba(0, 0, 0, 0.03) 4px
-      );
-      pointer-events: none;
-    }
-
-    .h-line {
-      width: 100%;
-      height: 1px;
-      background: linear-gradient(90deg, transparent 0%, var(--neon-blue) 40%, var(--neon-purple) 60%, transparent 100%);
-      opacity: 0.15;
-      margin: 0;
-    }
-
-    
-    nav {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      z-index: 100;
-      padding: 1.5rem 4rem;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      background: linear-gradient(180deg, rgba(2, 4, 8, 0.9) 0%, transparent 100%);
-      backdrop-filter: blur(8px);
-    }
-
-    .nav-logo {
-      font-family: 'Orbitron', monospace;
-      font-size: 1.2rem;
-      font-weight: 900;
-      letter-spacing: 0.1em;
-      color: var(--text-primary);
-      text-shadow: 0 0 10px rgba(255,255,255,0.2);
-    }
-    
-    .nav-logo span {
-      color: var(--neon-blue);
-      text-shadow: 0 0 20px var(--glow-blue);
-    }
-
-    .nav-links {
-      display: flex;
-      gap: 2.5rem;
-      list-style: none;
-    }
-
-    .nav-links a {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.75rem;
-      letter-spacing: 0.15em;
-      color: var(--text-muted);
-      text-decoration: none;
-      text-transform: uppercase;
-      transition: color 0.3s;
-      position: relative;
-    }
-
-    .nav-links a::after {
-      content: '';
-      position: absolute;
-      bottom: -4px;
-      left: 0;
-      width: 0;
-      height: 1px;
-      background: var(--neon-blue);
-      transition: width 0.3s;
-    }
-
-    .nav-links a:hover {
-      color: var(--neon-blue);
-    }
-
-    .nav-links a:hover::after {
-      width: 100%;
-    }
-
-    .nav-cta {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.72rem;
-      letter-spacing: 0.15em;
-      text-transform: uppercase;
-      padding: 0.6rem 1.5rem;
-      border: 1px solid var(--neon-blue);
-      background: transparent;
-      color: var(--neon-blue);
-      cursor: pointer;
-      transition: all 0.3s;
-      clip-path: polygon(8px 0%, 100% 0%, calc(100% - 8px) 100%, 0% 100%);
-    }
-
-    .nav-cta:hover {
-      background: var(--neon-blue);
-      color: var(--dark-bg);
-      box-shadow: 0 0 30px var(--glow-blue);
-    }
-
-    
-    #hero {
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      padding: 8rem 2rem 4rem;
-      overflow: hidden;
-    }
-
-    #particle-canvas {
-      position: absolute;
-      inset: 0;
-      z-index: 0;
-      opacity: 0.6;
-      pointer-events: none;
-    }
-
-    .hero-orb {
-      position: absolute;
-      border-radius: 50%;
-      filter: blur(80px);
-      pointer-events: none;
-    }
-
-    .hero-orb-1 {
-      width: 600px;
-      height: 600px;
-      background: radial-gradient(circle, rgba(0, 212, 255, 0.12) 0%, transparent 70%);
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      animation: orb-pulse 8s ease-in-out infinite;
-    }
-
-    .hero-orb-2 {
-      width: 400px;
-      height: 400px;
-      background: radial-gradient(circle, rgba(139, 92, 246, 0.15) 0%, transparent 70%);
-      top: 30%;
-      right: 10%;
-      animation: orb-drift 12s ease-in-out infinite alternate;
-    }
-
-    .hero-orb-3 {
-      width: 300px;
-      height: 300px;
-      background: radial-gradient(circle, rgba(244, 114, 182, 0.1) 0%, transparent 70%);
-      bottom: 20%;
-      left: 15%;
-      animation: orb-drift 10s ease-in-out infinite alternate-reverse;
-    }
-
-    @keyframes orb-pulse {
-      0%,
-      100% {
-        transform: translate(-50%, -50%) scale(1);
-      }
-      50% {
-        transform: translate(-50%, -50%) scale(1.15);
-      }
-    }
-
-    @keyframes orb-drift {
-      0% {
-        transform: translateY(0);
-      }
-      100% {
-        transform: translateY(-40px);
-      }
-    }
-
-    .hero-tag {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.7rem;
-      letter-spacing: 0.4em;
-      text-transform: uppercase;
-      color: var(--neon-blue);
-      border: 1px solid rgba(0, 212, 255, 0.3);
-      padding: 0.4rem 1.2rem;
-      margin-bottom: 2rem;
-      display: inline-block;
-      background: rgba(0, 212, 255, 0.05);
-      opacity: 0;
-      transform: translateY(20px);
-    }
-
-    .hero-headline {
-      font-family: 'Orbitron', monospace;
-      font-size: clamp(3rem, 7vw, 7rem);
-      font-weight: 900;
-      line-height: 0.95;
-      letter-spacing: -0.02em;
-      text-transform: uppercase;
-      margin-bottom: 2rem;
-    }
-
-    .hero-headline .line {
-      display: block;
-      overflow: hidden;
-    }
-
-    .hero-headline .word {
-      display: inline-block;
-      transform: translateY(100%);
-      opacity: 0;
-    }
-
-    .hero-headline .accent {
-      background: linear-gradient(135deg, var(--neon-blue), var(--neon-purple));
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      text-shadow: none;
-      filter: drop-shadow(0 0 30px rgba(0, 212, 255, 0.4));
-    }
-
-    .hero-sub {
-      font-size: 1.1rem;
-      font-weight: 300;
-      color: var(--text-muted);
-      max-width: 620px;
-      line-height: 1.7;
-      margin-bottom: 3rem;
-      opacity: 0;
-      transform: translateY(20px);
-    }
-
-    .hero-cta-group {
-      display: flex;
-      gap: 1.5rem;
-      align-items: center;
-      opacity: 0;
-      transform: translateY(20px);
-    }
-
-    .btn-primary {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.8rem;
-      letter-spacing: 0.15em;
-      text-transform: uppercase;
-      padding: 1rem 2.5rem;
-      background: var(--neon-blue);
-      color: var(--dark-bg);
-      border: none;
-      cursor: pointer;
-      font-weight: 700;
-      clip-path: polygon(12px 0%, 100% 0%, calc(100% - 12px) 100%, 0% 100%);
-      transition: all 0.3s;
-      box-shadow: 0 0 40px rgba(0, 212, 255, 0.3);
-    }
-
-    .btn-primary:hover {
-      box-shadow: 0 0 80px rgba(0, 212, 255, 0.6);
-      transform: scale(1.02);
-    }
-
-    .btn-primary-large {
-      font-size: 0.9rem;
-      padding: 1.2rem 3rem;
-    }
-
-    .btn-ghost {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.8rem;
-      letter-spacing: 0.15em;
-      text-transform: uppercase;
-      padding: 1rem 2.5rem;
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      color: var(--text-muted);
-      background: transparent;
-      cursor: pointer;
-      transition: all 0.3s;
-    }
-
-    .btn-ghost:hover {
-      border-color: var(--neon-purple);
-      color: var(--text-primary);
-    }
-
-    .scroll-indicator {
-      position: absolute;
-      bottom: 3rem;
-      left: 50%;
-      transform: translateX(-50%);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 0.5rem;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.65rem;
-      letter-spacing: 0.3em;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      opacity: 0;
-      animation: fade-bob 2s ease-in-out 2s infinite;
-    }
-
-    .scroll-line {
-      width: 1px;
-      height: 40px;
-      background: linear-gradient(180deg, var(--neon-blue), transparent);
-      animation: scroll-grow 2s ease-in-out 2s infinite;
-    }
-
-    @keyframes fade-bob {
-      0%,
-      100% {
-        opacity: 0.4;
-        transform: translateX(-50%) translateY(0);
-      }
-      50% {
-        opacity: 0.8;
-        transform: translateX(-50%) translateY(6px);
-      }
-    }
-
-    @keyframes scroll-grow {
-      0%,
-      100% {
-        transform: scaleY(1);
-        opacity: 0.5;
-      }
-      50% {
-        transform: scaleY(1.3);
-        opacity: 1;
-      }
-    }
-
-    
-    #stats {
-      padding: 5rem 4rem;
-      display: flex;
-      justify-content: center;
-      gap: 0;
-      flex-wrap: wrap;
-      border-top: 1px solid rgba(0, 212, 255, 0.08);
-      border-bottom: 1px solid rgba(0, 212, 255, 0.08);
-    }
-
-    .stat-item {
-      flex: 1;
-      min-width: 200px;
-      padding: 2rem 3rem;
-      border-right: 1px solid rgba(0, 212, 255, 0.08);
-      text-align: center;
-      opacity: 0;
-      transform: translateY(30px);
-    }
-
-    .stat-item:last-child {
-      border-right: none;
-    }
-
-    .stat-num {
-      font-family: 'Orbitron', monospace;
-      font-size: 3rem;
-      font-weight: 900;
-      color: var(--neon-blue);
-      display: block;
-      letter-spacing: -0.02em;
-      text-shadow: 0 0 30px var(--glow-blue);
-    }
-
-    .stat-label {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.7rem;
-      letter-spacing: 0.2em;
-      text-transform: uppercase;
-      color: var(--text-muted);
-      margin-top: 0.5rem;
-      display: block;
-    }
-
-    
-    #features {
-      padding: 8rem 4rem;
-      max-width: 1400px;
-      margin: 0 auto;
-    }
-
-    .section-tag {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.7rem;
-      letter-spacing: 0.4em;
-      text-transform: uppercase;
-      color: var(--neon-purple);
-      margin-bottom: 1rem;
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-      opacity: 0;
-      transform: translateX(-20px);
-    }
-
-    .section-tag::before {
-      content: '';
-      display: block;
-      width: 40px;
-      height: 1px;
-      background: var(--neon-purple);
-    }
-
-    .section-headline {
-      font-family: 'Orbitron', monospace;
-      font-size: clamp(2rem, 4vw, 4rem);
-      font-weight: 700;
-      line-height: 1.1;
-      margin-bottom: 4rem;
-      opacity: 0;
-      transform: translateY(30px);
-    }
-
-    .features-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 1.5px;
-      background: rgba(0, 212, 255, 0.08);
-    }
-
-    .feature-card {
-      background: var(--dark-surface);
-      padding: 3rem 2.5rem;
-      position: relative;
-      overflow: hidden;
-      opacity: 0;
-      transform: translateY(40px);
-      transition: background 0.4s;
-    }
-
-    .feature-card::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(135deg, rgba(0, 212, 255, 0.04) 0%, transparent 60%);
-      opacity: 0;
-      transition: opacity 0.4s;
-    }
-
-    .feature-card:hover {
-      background: var(--dark-card);
-    }
-
-    .feature-card:hover::before {
-      opacity: 1;
-    }
-
-    .feature-number {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.7rem;
-      letter-spacing: 0.3em;
-      color: var(--neon-blue);
-      margin-bottom: 2rem;
-      opacity: 0.5;
-    }
-
-    .feature-icon {
-      width: 48px;
-      height: 48px;
-      margin-bottom: 1.5rem;
-      position: relative;
-    }
-
-    .feature-icon svg {
-      width: 100%;
-      height: 100%;
-    }
-
-    .feature-title {
-      font-family: 'Orbitron', monospace;
-      font-size: 1.1rem;
-      font-weight: 700;
-      margin-bottom: 1rem;
-      letter-spacing: 0.05em;
-    }
-
-    .feature-desc {
-      font-size: 0.9rem;
-      color: var(--text-muted);
-      line-height: 1.7;
-    }
-
-    .feature-hover-line {
-      position: absolute;
-      bottom: 0;
-      left: 0;
-      width: 0;
-      height: 2px;
-      background: linear-gradient(90deg, var(--neon-blue), var(--neon-purple));
-      transition: width 0.4s ease;
-    }
-
-    .feature-card:hover .feature-hover-line {
-      width: 100%;
-    }
-
-    
-    #logo-draw {
-      padding: 10rem 4rem;
-      text-align: center;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-    }
-
-    #logo-draw .section-tag {
-      margin: 0 auto 1rem;
-    }
-
-    #logo-draw .section-headline {
-      text-align: center;
-      margin-bottom: 5rem;
-    }
-
-    .logo-svg-container {
-      width: 380px;
-      height: 260px;
-      position: relative;
-      opacity: 0;
-      transform: scale(0.8);
-      margin: 0 auto;
-    }
-
-    .logo-svg-container svg {
-      width: 100%;
-      height: 100%;
-    }
-
-    #logo-path {
-      stroke-dasharray: 1200;
-      stroke-dashoffset: 1200;
-      transition: stroke-dashoffset 0.1s linear;
-    }
-
-    #logo-path-fill {
-      opacity: 0;
-      transition: opacity 0.5s;
-    }
-
-    .logo-glow {
-      position: absolute;
-      inset: -40px;
-      border-radius: 20%;
-      background: radial-gradient(ellipse, rgba(0, 212, 255, 0.15) 0%, transparent 70%);
-      filter: blur(20px);
-      opacity: 0;
-      transition: opacity 0.5s;
-    }
-
-    
-    #process {
-      padding: 8rem 4rem;
-      max-width: 1200px;
-      margin: 0 auto;
-    }
-
-    .process-steps {
-      display: flex;
-      flex-direction: column;
-      gap: 0;
-      margin-top: 5rem;
-    }
-
-    .process-step {
-      display: grid;
-      grid-template-columns: 80px 1fr 1fr;
-      gap: 3rem;
-      padding: 3rem 0;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-      align-items: center;
-      opacity: 0;
-      transform: translateX(-40px);
-    }
-
-    .process-step:last-child {
-      border-bottom: none;
-    }
-
-    .step-num {
-      font-family: 'Orbitron', monospace;
-      font-size: 2.5rem;
-      font-weight: 900;
-      color: transparent;
-      -webkit-text-stroke: 1px rgba(0, 212, 255, 0.3);
-    }
-
-    .step-title {
-      font-family: 'Orbitron', monospace;
-      font-size: 1.3rem;
-      font-weight: 700;
-      margin-bottom: 0.75rem;
-    }
-
-    .step-desc {
-      font-size: 0.9rem;
-      color: var(--text-muted);
-      line-height: 1.7;
-    }
-
-    .step-visual {
-      height: 80px;
-      background: linear-gradient(135deg, var(--dark-card), var(--dark-surface));
-      border: 1px solid rgba(0, 212, 255, 0.1);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      position: relative;
-      overflow: hidden;
-      clip-path: polygon(10px 0%, 100% 0%, calc(100% - 10px) 100%, 0% 100%);
-    }
-
-    .step-visual-bar {
-      position: absolute;
-      left: 0;
-      top: 0;
-      bottom: 0;
-      width: 0;
-      background: linear-gradient(90deg, rgba(0, 212, 255, 0.15), rgba(139, 92, 246, 0.15));
-      transition: width 0.8s ease;
-    }
-
-    .step-visual-label {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.65rem;
-      letter-spacing: 0.2em;
-      color: var(--neon-blue);
-      text-transform: uppercase;
-      z-index: 1;
-    }
-
-    
-    #testimonial {
-      padding: 8rem 4rem;
-      text-align: center;
-      background: linear-gradient(180deg, transparent 0%, rgba(139, 92, 246, 0.05) 50%, transparent 100%);
-    }
-
-    .quote-mark {
-      font-family: 'Orbitron', monospace;
-      font-size: 8rem;
-      line-height: 0.6;
-      color: var(--neon-purple);
-      display: block;
-      margin-bottom: 2rem;
-      opacity: 0;
-      transform: scale(0.5);
-    }
-
-    .quote-text {
-      font-size: clamp(1.5rem, 3vw, 2.5rem);
-      font-weight: 300;
-      line-height: 1.4;
-      max-width: 800px;
-      margin: 0 auto 3rem;
-      opacity: 0;
-      transform: translateY(30px);
-    }
-
-    .quote-author {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.8rem;
-      letter-spacing: 0.2em;
-      color: var(--neon-blue);
-      text-transform: uppercase;
-      opacity: 0;
-      transform: translateY(20px);
-    }
-
-    
-    #cta-final {
-      padding: 10rem 4rem;
-      text-align: center;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .cta-bg-lines {
-      position: absolute;
-      inset: 0;
-      overflow: hidden;
-      pointer-events: none;
-    }
-
-    .cta-bg-lines::before,
-    .cta-bg-lines::after {
-      content: '';
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      border-radius: 50%;
-      transform: translate(-50%, -50%);
-    }
-
-    .cta-bg-lines::before {
-      width: 600px;
-      height: 600px;
-      border: 1px solid rgba(0, 212, 255, 0.05);
-      animation: expand-ring 4s ease-in-out infinite;
-    }
-
-    .cta-bg-lines::after {
-      width: 800px;
-      height: 800px;
-      border: 1px solid rgba(139, 92, 246, 0.04);
-      animation: expand-ring 4s ease-in-out 2s infinite;
-    }
-
-    @keyframes expand-ring {
-      0% {
-        transform: translate(-50%, -50%) scale(0.8);
-        opacity: 0.6;
-      }
-      100% {
-        transform: translate(-50%, -50%) scale(1.5);
-        opacity: 0;
-      }
-    }
-
-    .cta-headline {
-      font-family: 'Orbitron', monospace;
-      font-size: clamp(2.5rem, 6vw, 6rem);
-      font-weight: 900;
-      line-height: 1;
-      letter-spacing: -0.02em;
-      margin-bottom: 1.5rem;
-      text-transform: uppercase;
-      opacity: 0;
-      transform: translateY(40px);
-    }
-
-    .cta-sub {
-      font-size: 1rem;
-      color: var(--text-muted);
-      margin-bottom: 3rem;
-      opacity: 0;
-      transform: translateY(20px);
-    }
-
-    .cta-button-wrap {
-      opacity: 0;
-      transform: translateY(20px);
-    }
-
-    
-    footer {
-      padding: 3rem 4rem;
-      border-top: 1px solid rgba(0, 212, 255, 0.06);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      position: relative;
-      z-index: 2;
-    }
-
-    .footer-logo {
-      font-family: 'Orbitron', monospace;
-      font-size: 1rem;
-      font-weight: 900;
-      letter-spacing: 0.1em;
-      color: var(--text-muted);
-    }
-
-    .footer-meta {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.65rem;
-      letter-spacing: 0.2em;
-      color: var(--text-muted);
-      text-transform: uppercase;
-    }
-
-    
-    #dashboard-root {
-      display: none;
-    }
-
-    body[data-view="dashboard"] > nav,
-    body[data-view="dashboard"] > section,
-    body[data-view="dashboard"] > .h-line,
-    body[data-view="dashboard"] > footer {
-      display: none;
-    }
-
-    body[data-view="dashboard"] #dashboard-root {
-      display: block;
-    }
-
-    
-    @media (max-width: 1024px) {
-      nav {
-        padding: 1.2rem 2rem;
-      }
-
-      .nav-links {
-        gap: 1rem;
-      }
-
-      #features,
-      #process,
-      #testimonial,
-      #cta-final,
-      #stats,
-      footer {
-        padding-left: 2rem;
-        padding-right: 2rem;
-      }
-
-      .features-grid {
-        grid-template-columns: repeat(2, 1fr);
-      }
-
-      .process-step {
-        grid-template-columns: 60px 1fr;
-        gap: 1.5rem;
-      }
-
-      .step-visual {
-        grid-column: 1 / -1;
-      }
-    }
-
-    @media (max-width: 768px) {
-      .cursor,
-      .cursor-ring,
-      .scanlines {
-        display: none;
-      }
-
-      nav {
-        flex-wrap: wrap;
-        gap: 1rem;
-      }
-
-      .nav-links {
-        width: 100%;
-        justify-content: center;
-      }
-
-      .features-grid {
-        grid-template-columns: 1fr;
-      }
-
-      #stats {
-        padding-top: 3rem;
-        padding-bottom: 3rem;
-      }
-
-      .stat-item {
-        min-width: 50%;
-        border-right: none;
-        border-bottom: 1px solid rgba(0, 212, 255, 0.08);
-      }
-
-      .stat-item:nth-last-child(-n + 2) {
-        border-bottom: none;
-      }
-
-      footer {
-        flex-direction: column;
-        gap: 0.75rem;
-        text-align: center;
-      }
-    }
-  </style>
+  <link rel="stylesheet" href="/src/styles/landing.css">
 </head>
 <body data-view="landing">
   <div class="noise"></div>
@@ -1005,7 +24,7 @@
     <button class="nav-cta" data-open-dashboard="match">Deploy Engine</button>
   </nav>
 
-  
+  <!-- HERO -->
   <section id="hero">
     <canvas id="particle-canvas"></canvas>
 
@@ -1013,7 +32,8 @@
     <div class="hero-orb hero-orb-2"></div>
     <div class="hero-orb hero-orb-3"></div>
 
-    
+    <!-- Ambient streaming-text layer. Decorative only: React renders the
+         backdrop here (see src/main.jsx), behind the hero copy. -->
     <div id="ambient-root"></div>
 
     <div class="hero-tag">// Next-Generation Sports Analytics</div>
@@ -1041,7 +61,7 @@
 
   <div class="h-line"></div>
 
-  
+  <!-- STATS -->
   <section id="stats">
     <div class="stat-item">
       <span class="stat-num" data-target="99.9">0</span>
@@ -1063,7 +83,7 @@
 
   <div class="h-line"></div>
 
-  
+  <!-- FEATURES -->
   <section id="features">
     <div class="section-tag">Core Capabilities</div>
     <h2 class="section-headline">Built for the<br>Edge of the Pitch</h2>
@@ -1168,7 +188,7 @@
 
   <div class="h-line"></div>
 
-  
+  <!-- TACTICAL PITCH DRAW SECTION -->
   <section id="logo-draw">
     <div class="section-tag">Phase 2 Output</div>
     <h2 class="section-headline">
@@ -1179,7 +199,7 @@
     <div class="logo-svg-container" id="logo-container">
       <div class="logo-glow" id="logo-glow"></div>
       <svg viewBox="0 0 380 260" fill="none" xmlns="http://www.w3.org/2000/svg">
-        
+        <!-- Football Pitch Vectors -->
         <path
           id="logo-path"
           d="
@@ -1196,7 +216,7 @@
         ></path>
         <circle cx="190" cy="130" r="30" stroke="url(#logo-grad)" stroke-width="2" fill="none"></circle>
         
-        
+        <!-- Player Heatmap Dots -->
         <circle id="logo-path-fill" cx="190" cy="130" r="4" fill="#f472b6" opacity="0"></circle>
         <circle class="player-dot" cx="240" cy="80" r="4" fill="#00d4ff" opacity="0"></circle>
         <circle class="player-dot" cx="280" cy="180" r="4" fill="#00d4ff" opacity="0"></circle>
@@ -1215,7 +235,7 @@
 
   <div class="h-line"></div>
 
-  
+  <!-- PROCESS -->
   <section id="process">
     <div class="section-tag">MLOps Pipeline</div>
     <h2 class="section-headline">Four Steps to<br>Strategic Insight</h2>
@@ -1270,7 +290,7 @@
 
   <div class="h-line"></div>
 
-  
+  <!-- TESTIMONIAL -->
   <section id="testimonial">
     <span class="quote-mark">"</span>
     <p class="quote-text">
@@ -1281,7 +301,7 @@
 
   <div class="h-line"></div>
 
-  
+  <!-- CTA FINAL -->
   <section id="cta-final">
     <div class="cta-bg-lines"></div>
     <h2 class="cta-headline">
@@ -1300,11 +320,21 @@
     <div class="footer-meta">System Status: <span class="text-accent-purple">◉ Tracking Active</span></div>
   </footer>
 
-  
+  <!-- ============================================================
+       DASHBOARD MOUNT
+
+       The functional console renders here, in this same document,
+       under the same ambient layers and the same custom cursor.
+       There is no second HTML page: src/main.jsx (loaded at the very
+       bottom of this file) calls createRoot on this div.
+       ============================================================ -->
   <div id="dashboard-root"></div>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+  <!-- GSAP 3.12.5, vendored in public/vendor/gsap (see the README there).
+       Classic scripts on purpose: the inline script below reads the globals
+       they define, and module scripts would defer past it. -->
+  <script src="/vendor/gsap/gsap.min.js"></script>
+  <script src="/vendor/gsap/ScrollTrigger.min.js"></script>
   <script>
     (() => {
       'use strict';
@@ -1366,14 +396,14 @@
         };
         animateCursor();
 
-                                                                    
-                                                                              
-                                                                            
-                                                                              
-                                                                      
-                                                                             
-                                                                             
-                                                               
+        // CHANGED: this used to bind mouseenter/mouseleave to every
+        // 'button, a, .feature-card' that existed at load time. The dashboard
+        // mounts long after that snapshot is taken, so none of its buttons,
+        // tabs, or cards would ever have grown the cursor -- the effect would
+        // silently stop working the moment you left the landing view.
+        // Delegating from the document keeps the behaviour identical for the
+        // landing page while covering everything React renders later, and it
+        // is one pair of listeners instead of several hundred.
         const INTERACTIVE = 'button, a, input, select, textarea, summary, .feature-card, .dash-card, .dash-tab, .dash-pill, .dash-filedrop';
 
         const growCursor = () => {
@@ -1395,7 +425,7 @@
         document.addEventListener('mouseout', (event) => {
           const left = event.target.closest && event.target.closest(INTERACTIVE);
           if (!left) return;
-                                                                                 
+          // Moving between two children of the same control is not "leaving" it.
           if (event.relatedTarget && left.contains(event.relatedTarget)) return;
           shrinkCursor();
         });
@@ -1481,13 +511,13 @@
         };
 
         const animateParticles = () => {
-                                                                           
-                                                                             
-                                                                              
-                                                                            
-                                                                      
-                                                                             
-                                                        
+          // The hero is display:none while the dashboard view is up, which
+          // makes offsetParent null. The 120-particle O(n^2) connection pass
+          // would otherwise keep running every frame, forever, drawing into a
+          // canvas nobody can see -- and competing with the dashboard's own
+          // work for the main thread. Skipping the frame (rather than
+          // cancelling the loop) means it resumes instantly on the way back,
+          // with no restart and no lost particle state.
           if (!canvas.offsetParent) {
             requestAnimationFrame(animateParticles);
             return;
@@ -1594,7 +624,7 @@
           end: 'bottom 40%',
           scrub: true,
           onUpdate: ({ progress }) => {
-                                                                
+            // Path offset adjusted for the new pitch SVG length
             const pathOffset = 1200 - 1200 * progress;
             if (logoPath) logoPath.style.strokeDashoffset = String(pathOffset);
 
@@ -1750,7 +780,16 @@
         );
       }
 
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              
+      /* ==============================================================
+         Motion bridge — window.SSCMotion
+
+         The dashboard is React, but it does NOT ship a second animation
+         system. It calls into this one. animateIn() is the same
+         fade + translateY + 0.1s stagger used by animateFeatures() and
+         animateProcess() above, just pointed at whatever section React
+         has mounted, and countUp() is the identical 60-step / 16ms
+         routine that drives the landing page's .stat-num figures.
+         ============================================================== */
       function exposeMotionBridge(canAnimateWithGsap) {
         window.SSCMotion = {
           hasGsap: canAnimateWithGsap,
@@ -1808,9 +847,34 @@
         };
       }
 
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              
+      /* ==============================================================
+         View toggle — window.SSCView
+
+         Landing and dashboard are two views of ONE document. Opening the
+         dashboard flips body[data-view] (see the View Toggle rules in the
+         stylesheet above) and fires an 'ssc:view' event that the React
+         root subscribes to. No navigation, no unmount, no second page.
+         ============================================================== */
       function initViewToggle(canAnimateWithGsap) {
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
+        /* ------------------------------------------------------------
+           The URL is the single source of truth for which view and which
+           dashboard tab is showing.
+
+           Routes:
+             (no hash) / anything else  -> landing
+             #dashboard                 -> dashboard, default tab
+             #dashboard/<tabId>         -> dashboard, that tab
+
+           Making the hash authoritative — rather than mirroring a React
+           useState — is what gives refresh, deep-linking, and back/forward
+           the same behaviour for free: every one of them ends up calling
+           applyRoute() with a hash, and there is no second copy of "which
+           tab is open" that could disagree with the address bar.
+
+           Landing anchors (#features, #process) fall through to the
+           landing branch untouched, so the browser still scrolls to them
+           natively.
+           ------------------------------------------------------------ */
 
         const parseRoute = () => {
           const raw = (window.location.hash || '').replace(/^#\/?/, '');
@@ -1829,16 +893,16 @@
 
           document.body.dataset.view = view;
 
-                                                                           
-                                                                         
+          // Only on a real view change. Scrolling to top for every in-page
+          // anchor click would fight the browser's own anchor scrolling.
           if (viewChanged) window.scrollTo({ top: 0, behavior: 'auto' });
 
           window.dispatchEvent(new CustomEvent('ssc:view', { detail: { view, tab } }));
 
-                                                                          
-                                                                             
-                                                                       
-                                              
+          // The page height just changed by a whole document's worth, and
+          // every ScrollTrigger start/end above was measured against the old
+          // one. Without this the landing animations fire at the wrong
+          // scroll positions on the way back.
           if (viewChanged && canAnimateWithGsap) ScrollTrigger.refresh();
         };
 
@@ -1847,10 +911,10 @@
             view === 'dashboard' ? (tab ? `#dashboard/${tab}` : '#dashboard') : '#';
           const url = window.location.pathname + window.location.search + hash;
 
-                                                                           
-                                                                            
-                                                                           
-                                                         
+          // pushState (not `location.hash = ...`) so that going landing ->
+          // dashboard -> landing leaves proper history entries and does not
+          // depend on the hash string actually differing. It does not fire
+          // hashchange, hence the explicit applyRoute().
           if (replace) window.history.replaceState(null, '', url);
           else window.history.pushState(null, '', url);
           applyRoute();
@@ -1859,7 +923,7 @@
         window.SSCView = {
           open: (tab) => navigate('dashboard', tab),
           close: () => navigate('landing', null),
-                                                      
+          /** Tab switch from inside the dashboard. */
           go: (tab, options) => navigate('dashboard', tab, options),
           current: parseRoute
         };
@@ -1871,8 +935,8 @@
           });
         });
 
-                                                                              
-                                                          
+        // popstate covers back/forward over our pushState entries; hashchange
+        // covers someone editing the address bar by hand.
         window.addEventListener('popstate', applyRoute);
         window.addEventListener('hashchange', applyRoute);
         applyRoute();
@@ -1880,7 +944,9 @@
     })();
   </script>
 
-  
+  <!-- The dashboard bundle. Loaded last so window.SSCMotion / window.SSCView
+       already exist when React mounts. This is the single JS entry point for
+       the whole application. -->
   <script type="module" src="/src/main.jsx"></script>
 </body>
 </html>

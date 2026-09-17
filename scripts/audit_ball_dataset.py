@@ -1,25 +1,43 @@
-"""Auditable ball-dataset triage and derived-manifest builder."""
+"""Auditable ball-dataset triage and derived-manifest builder.
+
+This tool never edits registered source images or labels.  It resolves the
+dataset through ``configs.registry`` and writes a review table plus a derived
+dataset directory.  Detector outputs are evidence only: every row retains the
+signals and a human-review field, and no confidence threshold auto-labels a
+sample.  The script can run in a dependency-light inventory mode (the mode
+used to create the initial artifact in this repository) or, when Ultralytics
+is installed, add trained and COCO detector candidate signals.
+
+Examples:
+    python -m scripts.audit_ball_dataset --out datasets/derived/Ball_dataset_cleaned_v1
+    python -m scripts.audit_ball_dataset --out ... --trained-model ... --coco-model ...
+"""
 from __future__ import annotations
 
 import argparse
 import csv
 import hashlib
 import json
-import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 from configs import registry as R  # noqa: E402
 
 IMAGE_SUFFIXES = R.IMAGE_SUFFIXES
 SPLIT_PRIORITY = {"test": 0, "valid": 1, "train": 2}
 _DETECTOR_CACHE: dict[str, object] = {}
 
+# COCO class 32 is "sports ball". The general detector must be restricted to
+# it: scoring max-confidence over all 80 classes reports the crowd of people
+# in a football frame as a ball signal, which inflates the apparent hit rate
+# to near 100% and makes the trained-vs-COCO comparison meaningless.
 COCO_SPORTS_BALL = 32
 
+# Reporting thresholds only. These NEVER assign a bucket or a label -- they
+# exist so the review table can be counted ("how many rows would a human see
+# at >=0.25") without re-running inference. Raw max confidence is retained
+# per row so a reviewer can pick a different cut.
 REPORT_THRESHOLDS = (0.10, 0.25, 0.50)
 BATCH = 8
 
@@ -62,9 +80,7 @@ def _dedupe(records: list[dict]) -> tuple[list[dict], dict]:
     cross_split_groups = 0
     for row in records:
         old = chosen.get(row["sha1"])
-        if old is None:
-            chosen[row["sha1"]] = row
-        elif SPLIT_PRIORITY[row["source_split"]] < SPLIT_PRIORITY[old["source_split"]]:
+        if old is None or SPLIT_PRIORITY[row["source_split"]] < SPLIT_PRIORITY[old["source_split"]]:
             chosen[row["sha1"]] = row
     by_hash = defaultdict(list)
     for row in records:
@@ -97,7 +113,15 @@ def _heuristic(path: Path) -> tuple[str, str]:
 
 def _detector_signals(model_path: str | None, images: list[Path], imgsz: int,
                       classes: list[int] | None = None) -> list[tuple[str, float, str]]:
-    """Max-confidence per image for one detector, in ``images`` order."""
+    """Max-confidence per image for one detector, in ``images`` order.
+
+    Batched on purpose: the per-image form of this call loaded and re-warmed
+    the model 1,404 times and was the reason the first pass was never run to
+    completion.  A failure is recorded per row as ``unavailable`` with the
+    exception text -- it is never silently downgraded to ``no_candidate``,
+    because "the detector found nothing" and "the detector did not run" must
+    stay distinguishable to the human reviewer.
+    """
     if not model_path:
         return [("not_run", 0.0, "model_not_configured")] * len(images)
     try:
@@ -154,6 +178,10 @@ def build(out_dir: Path, trained_model: str | None = None, coco_model: str | Non
         reason = "existing_label_requires_human_box_QA" if rec["labeled"] else "unlabeled_source_image;human_signoff_required"
         heuristic, heuristic_evidence = _heuristic(rec["image"])
         if not rec["labeled"]:
+            # Flags are review hints at a NAMED threshold, recorded in the
+            # reason text so the row explains its own provenance. They order
+            # the reviewer's queue; they do not decide the bucket, which
+            # stays `ambiguous` for every unlabeled image regardless of score.
             flags = []
             if trained_status == "candidate" and trained_conf >= flag_threshold:
                 flags.append("trained_ball_candidate")

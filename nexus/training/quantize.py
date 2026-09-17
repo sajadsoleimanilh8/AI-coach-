@@ -8,8 +8,16 @@ from nexus.training.config import TrainingConfig
 
 DEFAULT_OLLAMA_MODEL_NAME = "nexus-custom"
 
+# The ONLY --outtype values convert_hf_to_gguf.py accepts. It is a
+# converter, not a quantizer: k-quants like q4_k_m are produced by the
+# separate llama-quantize binary, from a GGUF this script has already
+# written. Passing "q4_k_m" here fails outright — which is what the
+# previous single-command instruction told people to do.
 CONVERTER_OUTTYPES = ("f32", "f16", "bf16", "q8_0", "tq1_0", "tq2_0", "auto")
 
+# What we convert to before quantizing. f16 is the standard intermediate:
+# lossless relative to the merged bf16 weights for this purpose, and the
+# input llama-quantize expects.
 INTERMEDIATE_OUTTYPE = "f16"
 
 
@@ -18,6 +26,9 @@ def gguf_conversion_instructions(
 ) -> str:
     """Both commands needed to turn merged HF weights into a quantized
     GGUF, in order, with the intermediate file named explicitly.
+
+    Pure string building with no ML imports, so the exact text a user is
+    told to run is testable on any machine.
     """
     merged = Path(merged_dir)
     target = Path(gguf_path)
@@ -77,7 +88,14 @@ def merge_and_export(
     output_dir: str | Path,
     quantization: str = "q4_k_m",
 ) -> Path:
-    """Merges the LoRA adapter into the base model and exports GGUF."""
+    """Merges the LoRA adapter into the base model and exports GGUF.
+
+    Peak memory here is HIGHER than during training: merging briefly holds
+    the base model's unquantized weights plus the merged copy, with none of
+    QLoRA's 4-bit savings. Run this with Ollama stopped and nothing else on
+    the GPU — a machine that trained fine at 12GB can still fail to merge.
+    Same lazy-import discipline as train.py.
+    """
     import torch
     from peft import PeftModel
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -88,7 +106,17 @@ def merge_and_export(
     tokenizer = AutoTokenizer.from_pretrained(config.base_model)
     base_model = AutoModelForCausalLM.from_pretrained(
         config.base_model,
+        # Follow the same compute dtype the run trained under rather than
+        # hardcoding one. This was float16, which is wrong twice over:
+        # Mistral-7B-Instruct-v0.3 is natively bfloat16, so fp16 downcast
+        # the weights being merged, AND materializing fp16 on CPU through
+        # accelerate's dispatch crashes torch 2.11 on this box with an
+        # access violation (0xC0000005) partway through loading — a hard
+        # native crash with no Python traceback, not a clean OOM.
         dtype=getattr(torch, config.bnb_4bit_compute_dtype),
+        # Merging on CPU trades speed for not competing with anything
+        # resident on the 12GB card — this step is run once, so the slower
+        # path is the right default.
         device_map="cpu",
     )
     merged = PeftModel.from_pretrained(base_model, str(adapter_dir)).merge_and_unload()

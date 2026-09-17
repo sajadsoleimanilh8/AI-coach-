@@ -30,19 +30,16 @@ from __future__ import annotations
 
 import argparse
 import copy
-import sys
 from pathlib import Path
 
 import cv2
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from ai.computer_vision.player_tracking import reid_merge
 from ai.computer_vision.player_tracking.tracker import track_video
 from ai.computer_vision.tactical_analysis.team_assignment import assign_teams_with_stats
 from configs import registry
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def audit(video_path: str, n_frames: int, device: str = "0") -> dict:

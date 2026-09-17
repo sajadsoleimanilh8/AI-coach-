@@ -1,5 +1,22 @@
 """
 Prints the five model checkpoint paths the registry resolves to.
+
+WHY
+    Docker compose files and backend/.env.example used to hardcode a single
+    YOLO_MODEL_PATH, pointed at a stock untrained COCO checkpoint. Any file
+    that restates a path drifts from the registry that owns it. This script
+    is how those files stay honest: it emits exactly what
+    configs/registry.py::env_overrides() produces, so a deploy can be
+    verified rather than assumed.
+
+Usage:
+    python -m scripts.print_model_env               # KEY=VALUE
+    python -m scripts.print_model_env --check       # also verify each exists
+    python -m scripts.print_model_env --docker      # compose `environment:` block
+    python -m scripts.print_model_env --volumes     # compose read-only mounts
+
+Exit code is non-zero under --check if any checkpoint is missing, so this
+can gate a deploy.
 """
 
 from __future__ import annotations
@@ -9,8 +26,6 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from configs import registry  # noqa: E402
 
@@ -32,6 +47,10 @@ def main() -> int:
     missing: list[str] = []
 
     if args.docker or args.volumes:
+        # Container-relative paths: the checkpoint path from models.yaml
+        # joined to the container's model root, NOT the host path -- which
+        # is the exact mistake that would make a compose file silently
+        # reference a directory that does not exist in the image.
         cfg = registry.models_config()["models"]
         if args.docker:
             print(f"      SSC_MODEL_ROOT: {args.container_root}")

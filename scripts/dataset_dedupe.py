@@ -1,5 +1,43 @@
 """
 Deduplicating split manifest builder.
+
+WHY THIS EXISTS
+    Several registered datasets are assembled from multiple independently
+    exported Roboflow projects (ball has 6 source dirs, player has 2).
+    Each export did its OWN train/valid/test split, and the same source
+    image appears in more than one of them -- so after merging, a file that
+    one export put in `train` is byte-identical to a file another export
+    put in `test`.
+
+    Measured on the ball dataset: 1,912 files, 1,404 unique (26.6%
+    redundancy), and 114 unique images present in more than one split.
+    Training on that and reporting the resulting mAP would be reporting
+    test-set memorisation. This is not a hypothetical -- see
+    docs/dataset_audit/ball.md.
+
+WHAT IT DOES
+    Hashes every image (sha1 of file bytes), assigns each UNIQUE image to
+    exactly one split, and writes train/val/test manifest .txt files
+    listing absolute image paths. Ultralytics accepts a .txt manifest
+    anywhere it accepts a directory, so this fixes both leakage and
+    redundancy with no copying and NO MUTATION of the source datasets.
+
+SPLIT PRIORITY
+    test > valid > train. If an image appears in both train and test it is
+    kept in TEST and dropped from train. Evaluation integrity is the thing
+    being protected, so the eval split always wins; the training set gives
+    up the sample. The alternative (keep it in train) would leave the
+    evaluation split contaminated, which is the exact failure being fixed.
+
+LONG PATHS
+    Paths over 260 chars are written in extended-length form on Windows so
+    the loader can open them (see scripts/dataset_qa.py::MAX_PATH -- the
+    goalpost set contains a 298-char filename that a naive open() cannot
+    read at all).
+
+Usage
+    python -m scripts.dataset_dedupe ball
+    python -m scripts.dataset_dedupe            # every dataset in the registry
 """
 
 from __future__ import annotations
@@ -9,8 +47,6 @@ import hashlib
 import sys
 from collections import defaultdict
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from configs import registry as R  # noqa: E402
 
@@ -31,6 +67,7 @@ def build_manifests(name: str, out_dir: Path | None = None) -> dict:
     out_dir = out_dir or (R.REPO_ROOT / "runs" / "_data" / name)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # digest -> (best_split, path)
     chosen: dict[str, tuple[str, Path]] = {}
     counts_raw: dict[str, int] = defaultdict(int)
     dropped_dup = 0
@@ -55,6 +92,7 @@ def build_manifests(name: str, out_dir: Path | None = None) -> dict:
                 if prev is None:
                     chosen[digest] = (split, p)
                     continue
+                # Duplicate. Keep whichever split has higher priority.
                 if SPLIT_PRIORITY[split] < SPLIT_PRIORITY[prev[0]]:
                     chosen[digest] = (split, p)
                 if split != prev[0]:
@@ -67,6 +105,7 @@ def build_manifests(name: str, out_dir: Path | None = None) -> dict:
         by_split[split].append(path)
 
     written = {}
+    # ultralytics maps the data.yaml key `val` to the on-disk split `valid`
     for split, key in (("train", "train"), ("valid", "val"), ("test", "test")):
         paths = sorted(by_split.get(split, []))
         manifest = out_dir / f"{key}.txt"

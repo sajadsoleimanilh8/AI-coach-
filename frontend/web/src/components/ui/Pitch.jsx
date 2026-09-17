@@ -1,8 +1,30 @@
 import { EmptyState } from './States.jsx';
 
-                                                                                                                                                                                                                                                                                                                                      
+/**
+ * Pitch visuals, drawn with the exact same vectors as the #logo-draw SVG on
+ * the landing page (viewBox 0 0 380 260, the same rectangle / halfway line /
+ * penalty boxes / centre circle, stroked with the same blue->purple
+ * gradient). The dashboard's pitch and the marketing pitch are literally the
+ * same drawing.
+ */
 
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+/**
+ * Colour for a team id. One definition, used by both the minimap and the
+ * video overlay.
+ *
+ * FIXED: each of those two had its own copy and BOTH matched by substring --
+ * the minimap on `includes('a')`, the overlay on `includes('b')`. Every team
+ * id in this system is "team-home" or "team-away": both contain an "a" (in
+ * "team") and neither contains a "b", so the minimap painted both teams blue
+ * and so did the overlay. The team distinction they appeared to draw was
+ * decorative in both.
+ *
+ * Matched exactly now, with anything unrecognised reading as unassigned --
+ * which is true -- rather than being bucketed by how its id is spelled. Kept
+ * identical to backend/pipeline/overlay_video.py's TEAM_COLOURS_BGR, so the
+ * live overlay and the burned-in annotated video cannot disagree about which
+ * team a player is on.
+ */
 export function teamColour(teamId) {
   const key = teamId === null || teamId === undefined ? '' : String(teamId).trim().toLowerCase();
   if (key === 'team-home' || key === 'home' || key === '0') return '#00d4ff';
@@ -13,10 +35,10 @@ export function teamColour(teamId) {
 const VIEW_W = 380;
 const VIEW_H = 260;
 const PAD = 10;
-const INNER_W = VIEW_W - PAD * 2;       
-const INNER_H = VIEW_H - PAD * 2;       
+const INNER_W = VIEW_W - PAD * 2; // 360
+const INNER_H = VIEW_H - PAD * 2; // 240
 
-                                                                                
+/** metres -> SVG units, for a pitch of the length/width the backend reports. */
 export function projectToPitch(xMetres, yMetres, lengthM, widthM) {
   return {
     x: PAD + (xMetres / lengthM) * INNER_W,
@@ -47,7 +69,14 @@ export function PitchOutline({ gradientId = 'pitch-grad' }) {
   );
 }
 
-                                                                                                                                                                                                                                                                                                                                  
+/**
+ * GET /api/matches/{match_id}/heatmap/{player_id} rendered as a density grid
+ * over the pitch outline.
+ *
+ * `density` is already normalised 0..1 by the backend (count / max_count),
+ * so it maps straight to opacity -- nothing is rescaled here, which would
+ * make one player's heatmap incomparable to another's.
+ */
 export function HeatmapPitch({ heatmap }) {
   const {
     cells = [],
@@ -86,7 +115,10 @@ export function HeatmapPitch({ heatmap }) {
         role="img"
         aria-label={isImageSpace ? 'Player image-space density grid' : 'Player position heatmap'}
       >
-                                                                                                                                                                                                                                                                                                         
+        {/* No pitch markings in image space. The cells are frame pixels, so
+            drawing a halfway line and penalty boxes under them would assert
+            a correspondence between the two that does not exist -- the
+            camera pans, and cell (10, 6) is not the centre circle. */}
         {isImageSpace ? (
           <rect
             x={PAD} y={PAD} width={INNER_W} height={INNER_H}
@@ -121,7 +153,9 @@ export function HeatmapPitch({ heatmap }) {
         <span className="dash-pitch-swatch" style={{ background: '#8b5cf6' }} /> mid
         <span className="dash-pitch-swatch" style={{ background: '#f472b6' }} /> high
         <span className="dash-pitch-legend-meta">
-                                                                                                                                                                                                                                           
+          {/* The extent that was actually binned. Reporting the pitch model
+              here in image space would have labelled a grid of frame pixels
+              "105m × 68m", which is the one claim this view must never make. */}
           {isImageSpace
             ? `${cols}×${rows} grid · ${frameW ?? '?'}×${frameH ?? '?'} px frame`
             : `${cols}×${rows} grid · ${lengthM}m × ${widthM}m`}
@@ -131,7 +165,15 @@ export function HeatmapPitch({ heatmap }) {
   );
 }
 
-                                                                                                                                                                                                                                                                                                                                                                                                                                                 
+/**
+ * A single tracking frame as a 2D pitch minimap.
+ *
+ * Only players with non-null pitch_x_m/pitch_y_m are drawn. When calibration
+ * is invalid every player in the frame has null pitch coordinates, and the
+ * honest result is an empty pitch with a stated reason -- pixel coordinates
+ * are NOT substituted in, because a pixel position plotted on a metric pitch
+ * is a fabricated location that looks exactly like a real one.
+ */
 export function TrackingMinimap({ frame, calibration, pitchLengthM = 105, pitchWidthM = 68 }) {
   const players = frame?.players || [];
   const positioned = players.filter(
@@ -176,20 +218,43 @@ export function TrackingMinimap({ frame, calibration, pitchLengthM = 105, pitchW
   );
 }
 
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
+/**
+ * The tactical overlay stacked over the <video>.
+ *
+ * COORDINATE SPACE -- the thing this component gets right and used not to.
+ *
+ * Every pixel_x/pixel_y the backend serves is in the SOURCE clip's pixel
+ * space. The viewBox therefore has to be the source frame's extent, which is
+ * `sourceWidth`/`sourceHeight` -- NOT the played <video> element's intrinsic
+ * size.
+ *
+ * Those two are the same number only for the raw upload. The processed clip
+ * is re-encoded at OVERLAY_MAX_WIDTH (960 by default), so a 1280x720 source
+ * plays back as 960x540: sizing the viewBox from the video element made every
+ * marker land at 1.33x its true position and pushed most of them off the
+ * right-hand edge. That is precisely the "overlay is attached to the wrong
+ * video" failure -- the overlay only ever lined up because it was pinned to
+ * the raw clip, and it was pinned to the raw clip because it could not
+ * survive being moved.
+ *
+ * With the source extent as the viewBox and preserveAspectRatio="none", the
+ * same overlay is correct over EITHER source, because both are the same
+ * framing at different scales and the SVG maps its viewBox onto whatever box
+ * CSS gives it.
+ */
 export function TrackingOverlaySvg({
   frame,
   sourceWidth,
   sourceHeight,
   showPlayers = true,
   showBall = true,
-                                                                            
-                                                                         
-                                                                           
-                                                                            
-                                                                           
-                                                                       
-                               
+  // Track-id text. Suppressed over the annotated render, where the pipeline
+  // has already burned the same ids in: drawing them twice would put two
+  // copies of the same number on one player and invite reading them as two
+  // independent identifications. The ring is still drawn, because it is the
+  // live layer and it is what stays synchronised with currentTime -- it is
+  // visually a ring against the render's rectangle, so the two are not
+  // mistakable for each other.
   showLabels = true,
   focusPlayerId = null,
 }) {
@@ -198,9 +263,9 @@ export function TrackingOverlaySvg({
 
   if (!sourceWidth || !sourceHeight) return null;
 
-                                                                              
-                                                                       
-                                                                            
+  // Stroke and glyph sizes are expressed in viewBox units, so they scale with
+  // the source rather than with however large the player happens to be
+  // rendered. A 4K source and a 720p source get proportionally equal marks.
   const unit = sourceWidth / 100;
 
   return (

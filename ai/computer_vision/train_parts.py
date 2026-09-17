@@ -1,5 +1,53 @@
 """
 Part-wise ("chunked") training with reboot-safe resume.
+
+PURPOSE
+    The player model is a ~7-hour run on a laptop. Running it in one go
+    cooks the machine. This module splits it into N operator-controlled
+    Parts that are run ONE AT A TIME, with an arbitrary cooldown between
+    them, and no automatic progression to the next Part.
+
+WHY PARTS ARE EPOCH RANGES, NOT FILE RANGES
+    This is the load-bearing design decision, so it is stated plainly.
+
+    For a file-wise preprocessing job, "Part 3 of 6" means "the third
+    sixth of the files", and the parts are independent. Training is not
+    like that. Splitting 12,248 images into 6 disjoint sets and training
+    on each separately produces six models that have each seen one sixth
+    of the data -- or, run sequentially against one checkpoint, a model
+    that progressively forgets the earlier fifths. Either way the result
+    is materially worse than training on the whole set, and its metrics
+    still look plausible, which is the dangerous part.
+
+    So a Part here is a contiguous EPOCH range. Every Part trains on
+    100% of the dataset; Part N simply continues where Part N-1 stopped.
+    The finished model is identical to what an uninterrupted run would
+    have produced (same data, same schedule, same total epochs).
+
+HOW RESUME WORKS (survives a reboot)
+    Two independent mechanisms, neither of which is an in-memory counter:
+
+      1. Ultralytics writes `last.pt` after EVERY epoch, and that
+         checkpoint stores the epoch number, optimizer state, LR schedule
+         and EMA. `resume=True` continues from it exactly.
+      2. This module writes `parts_state.json` next to the weights after
+         every Part, recording which Parts are complete and the epoch each
+         one ended on. That file is the operator-facing ledger and is what
+         the ordering/duplicate checks read.
+
+    On restart the two are cross-checked against each other. If they
+    disagree (e.g. a Part was killed mid-epoch), `last.pt` wins, because
+    it is the thing that actually holds the weights, and the discrepancy
+    is reported rather than silently reconciled.
+
+SAFETY RULES
+    - A Part refuses to run if the previous Part is not complete: no gaps.
+    - A completed Part refuses to re-run without --force: no wasted hours,
+      no accidental overwrite of good weights.
+    - Nothing here touches the dataset. No file is renamed, moved,
+      relabelled or rewritten -- the dataset is read-only input to
+      training, so the "don't break the dataset structure" requirement is
+      satisfied by construction.
 """
 
 from __future__ import annotations
@@ -7,7 +55,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from configs import registry as R
@@ -17,8 +65,8 @@ from configs import registry as R
 class PartPlan:
     part: int
     total_parts: int
-    start_epoch: int
-    end_epoch: int
+    start_epoch: int          # 1-based, inclusive
+    end_epoch: int            # 1-based, inclusive
     total_epochs: int
 
     @property
@@ -29,6 +77,12 @@ class PartPlan:
 def plan_parts(total_epochs: int, total_parts: int) -> list[PartPlan]:
     """
     Splits `total_epochs` into `total_parts` contiguous ranges.
+
+    Guarantees, which are asserted by scripts/verify_parts.py:
+      - every epoch belongs to exactly one Part (no overlap, no gaps);
+      - the union of all Parts is exactly 1..total_epochs;
+      - sizes differ by at most 1 (the remainder is spread over the
+        earliest Parts rather than dumped on the last one).
     """
     if total_parts < 1 or total_parts > total_epochs:
         raise ValueError(
@@ -42,6 +96,9 @@ def plan_parts(total_epochs: int, total_parts: int) -> list[PartPlan]:
     return plans
 
 
+# ----------------------------------------------------------------------
+# Persisted state
+# ----------------------------------------------------------------------
 
 class PartsState:
     """The on-disk ledger of completed Parts (`parts_state.json`)."""
@@ -54,6 +111,9 @@ class PartsState:
             try:
                 self.data = json.loads(path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
+                # A truncated ledger (power loss mid-write) must not brick
+                # the run: last.pt is the real source of truth, so start a
+                # fresh ledger and let the cross-check report the gap.
                 backup = path.with_suffix(".corrupt.json")
                 path.replace(backup)
                 print(f"[parts] WARNING: unreadable state file, moved to {backup}")
@@ -62,7 +122,7 @@ class PartsState:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
-        tmp.replace(self.path)
+        tmp.replace(self.path)          # atomic: never a half-written ledger
 
     def completed(self) -> set[int]:
         return {int(k) for k, v in self.data.get("parts", {}).items()
@@ -94,6 +154,16 @@ class ChunkComplete(Exception):
 def checkpoint_state(last_pt: Path) -> tuple[int | None, bool]:
     """
     Reads `last.pt` and returns (epochs_completed, is_finalized).
+
+    This is the reboot-proof source of truth -- it reads the weights file
+    itself, not any counter this program kept.
+
+    `is_finalized` is True when ultralytics has stripped the optimizer from
+    the checkpoint, which it does in final_eval() once training reaches its
+    natural end. A stripped checkpoint stores epoch = -1 and has no
+    optimizer state, so it CANNOT be resumed -- distinguishing that from
+    "0 epochs done" matters, because the two look identical if you only
+    read the epoch field.
     """
     if not last_pt.exists():
         return None, False
@@ -102,8 +172,8 @@ def checkpoint_state(last_pt: Path) -> tuple[int | None, bool]:
         ckpt = torch.load(last_pt, map_location="cpu", weights_only=False)
         epoch = int(ckpt.get("epoch", -1))
         if epoch < 0:
-            return None, True
-        return epoch + 1, False
+            return None, True          # stripped: training ran to completion
+        return epoch + 1, False        # 0-based index -> epochs completed
     except Exception as exc:                                  # noqa: BLE001
         print(f"[parts] could not read epoch from {last_pt}: {exc}")
         return None, False
@@ -115,6 +185,9 @@ def checkpoint_epoch(last_pt: Path) -> int | None:
     return checkpoint_state(last_pt)[0]
 
 
+# ----------------------------------------------------------------------
+# Progress reporting
+# ----------------------------------------------------------------------
 
 class PartProgress:
     """Prints the per-epoch progress block for the current Part."""
@@ -142,6 +215,9 @@ class PartProgress:
         )
 
 
+# ----------------------------------------------------------------------
+# Running one Part
+# ----------------------------------------------------------------------
 
 def run_part(model_name: str, part: int, total_parts: int, *,
              force: bool = False, overrides: dict | None = None) -> dict:
@@ -177,6 +253,7 @@ def run_part(model_name: str, part: int, total_parts: int, *,
         print(f"  last.pt epoch    : "
               f"{ckpt_epoch if ckpt_epoch is not None else 'no checkpoint yet'}")
 
+    # ---- ordering / duplicate guards --------------------------------
     if part in done and not force:
         msg = (f"Part {part} is already marked completed "
                f"(epochs {plan.start_epoch}-{plan.end_epoch}). "
@@ -192,7 +269,8 @@ def run_part(model_name: str, part: int, total_parts: int, *,
             f"skipped epochs would never be trained. Run Part {missing[0]} first."
         )
 
-    expected_start = plan.start_epoch - 1
+    # ---- cross-check ledger against the real checkpoint --------------
+    expected_start = plan.start_epoch - 1        # epochs completed before this part
     if ckpt_epoch is not None and ckpt_epoch != expected_start and not force:
         if ckpt_epoch > expected_start:
             print(f"\n  NOTE: last.pt holds {ckpt_epoch} epochs but Part {part} "
@@ -205,7 +283,7 @@ def run_part(model_name: str, part: int, total_parts: int, *,
                   f"died mid-epoch; training resumes from {ckpt_epoch}, so no "
                   f"epoch is skipped.")
 
-    started = datetime.now(timezone.utc)
+    started = datetime.now(UTC)
     progress = PartProgress(plan)
 
     from ultralytics import YOLO
@@ -217,7 +295,9 @@ def run_part(model_name: str, part: int, total_parts: int, *,
         "data": str(data_yaml),
         "project": str(R.runs_root()),
         "name": spec.run_name,
-        "epochs": total_epochs,
+        "epochs": total_epochs,     # ALWAYS the full schedule -- the chunk
+                                    # stops early via callback, so the LR
+                                    # schedule matches an uninterrupted run
         "exist_ok": True,
         "resume": resume,
     })
@@ -230,6 +310,26 @@ def run_part(model_name: str, part: int, total_parts: int, *,
         absolute = int(trainer.epoch) + 1
         progress.update(absolute)
         if absolute >= plan.end_epoch and not is_final_part:
+            # Abort by RAISING, not by setting trainer.stop.
+            #
+            # Verified against ultralytics/engine/trainer.py (8.4.98):
+            #   565  save_model()                 <- last.pt for THIS epoch
+            #   578  run_callbacks(on_fit_epoch_end)   <- we are here
+            #   587  if self.stop: break
+            #   594  final_eval()
+            #   896  strip_optimizer(self.last)
+            #
+            # Setting trainer.stop breaks the loop but still falls through
+            # to final_eval(), which strips the optimizer and writes
+            # epoch = -1. That checkpoint CANNOT be resumed, so every Part
+            # after the first would silently restart from epoch 1 with a
+            # fresh optimizer. Raising here escapes before line 594, so
+            # last.pt keeps its optimizer state and epoch number and
+            # `resume=True` picks up exactly where this Part stopped.
+            #
+            # The FINAL Part deliberately does not raise: it runs to its
+            # natural end so final_eval() does run and best.pt is properly
+            # finalized.
             print(f"\n  >> Part {plan.part} epoch budget reached "
                   f"({plan.end_epoch}). Stopping before final_eval to keep "
                   f"the checkpoint resumable.", flush=True)
@@ -243,17 +343,21 @@ def run_part(model_name: str, part: int, total_parts: int, *,
         model.train(**args)
         reached_natural_end = True
     except ChunkComplete:
-        pass
+        pass                      # expected: this Part hit its epoch budget
     except Exception as exc:                                  # noqa: BLE001
         status, note = "failed", f"{type(exc).__name__}: {exc}"
         print(f"\n  PART FAILED: {note}")
 
-    finished = datetime.now(timezone.utc)
+    finished = datetime.now(UTC)
     final_epoch, finalized = checkpoint_state(last_pt)
     if finalized or (reached_natural_end and is_final_part):
+        # Training reached its natural end; the stripped checkpoint no
+        # longer carries an epoch number, but we know it completed.
         final_epoch = total_epochs
     epochs_run = (final_epoch or 0) - expected_start
 
+    # A Part only counts as completed if the checkpoint really reached its
+    # last epoch -- never on the basis of train() simply returning.
     if status == "completed" and (final_epoch or 0) < plan.end_epoch:
         status = "incomplete"
         note = (f"checkpoint reached epoch {final_epoch}, expected "
@@ -297,12 +401,24 @@ def all_parts_complete(model_name: str, total_parts: int) -> tuple[bool, list[in
     return (not missing), missing
 
 
+# ----------------------------------------------------------------------
+# Finalize (the "merge" step, run once after the last Part)
+# ----------------------------------------------------------------------
 
 def finalize(model_name: str, total_parts: int, *, force: bool = False) -> dict:
     """
     Runs ONCE, after every Part has completed. There is nothing to merge in
     the file sense -- each Part continued the same weights file, so the
     trained model already exists. Finalizing therefore means:
+
+      1. verify all Parts completed and the checkpoint reached the full
+         epoch count (refuses to proceed otherwise);
+      2. verify the dataset is intact and unchanged by training;
+      3. evaluate best.pt on the held-out test split;
+      4. publish the checkpoint to its registry path and write metrics.json.
+
+    Deliberately never called automatically from run_part() -- the operator
+    controls progression. train_player.py calls it after the final Part.
     """
     from ai.computer_vision.train_common import evaluate_model
 
@@ -322,6 +438,8 @@ def finalize(model_name: str, total_parts: int, *, force: bool = False) -> dict:
     last_pt = run_dir / "weights" / "last.pt"
     final_epoch, finalized = checkpoint_state(last_pt)
     if finalized:
+        # Optimizer stripped => ultralytics ran final_eval() => the full
+        # schedule completed. The epoch field is -1 by design, not zero.
         final_epoch = total_epochs
     if final_epoch is not None and final_epoch < total_epochs and not force:
         raise RuntimeError(
@@ -330,6 +448,7 @@ def finalize(model_name: str, total_parts: int, *, force: bool = False) -> dict:
     if not best_pt.exists():
         raise FileNotFoundError(f"No trained weights at {best_pt}")
 
+    # ---- dataset integrity: training must not have altered it --------
     report = R.verify_dataset(spec.dataset, strict=False)
     n_images = sum(s.n_images for s in report.splits)
     n_labels = sum(s.n_labels for s in report.splits)
@@ -347,6 +466,11 @@ def finalize(model_name: str, total_parts: int, *, force: bool = False) -> dict:
             manifest_counts[key] = {"count": len(lines), "unique": len(set(lines))}
 
     print("\n  evaluating best.pt on the held-out test split ...")
+    # Evaluate the RUN's best.pt explicitly. Calling evaluate_model without
+    # a model would go through spec.require_checkpoint(), which points at
+    # the published registry path -- and that file is only written a few
+    # lines below, so on a first run it does not exist yet and finalize
+    # would fail at the last step of the last Part.
     from ultralytics import YOLO
     metrics = evaluate_model(spec, model=YOLO(str(best_pt)), split="test")
 
@@ -364,7 +488,7 @@ def finalize(model_name: str, total_parts: int, *, force: bool = False) -> dict:
         "dataset_images": n_images, "dataset_labels": n_labels,
         "split_manifests": manifest_counts,
         "metrics": metrics,
-        "finalized_at": datetime.now(timezone.utc).isoformat(),
+        "finalized_at": datetime.now(UTC).isoformat(),
         "environment": _environment(),
     }
     spec.metrics_file.parent.mkdir(parents=True, exist_ok=True)

@@ -23,6 +23,11 @@ class PlanningAgent(Agent):
         )
 
     async def prepare_context(self, context: AgentContext) -> list[Message]:
+        # The concrete Phase 6 x Phase 7 integration point: reuses
+        # PersonalStateEngine + WeaknessEngine + build_personal_context_message
+        # exactly as chat.py's use_personal_context path does (principle 1) —
+        # weakness_engine/profile_store are threaded through context.extra
+        # since AgentContext's fixed fields only carry personal_state itself.
         state = await context.personal_state.get_state(context.user_id)
 
         weakness_engine = context.extra.get("weakness_engine")

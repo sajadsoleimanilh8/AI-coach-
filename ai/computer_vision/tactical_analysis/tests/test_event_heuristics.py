@@ -2,10 +2,7 @@
 Unit tests for Event Heuristics (Pass, Shot, First Touch, Turnover).
 """
 
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
 
 from ai.computer_vision.pass_detection.pass_heuristics import detect_passes
 from ai.computer_vision.shot_detection.shot_heuristics import detect_shots
@@ -18,11 +15,13 @@ def test_get_ball_possessor_and_first_touch():
         {"player_id": 7, "team_id": "team-B", "pitch_x_m": 50.0, "pitch_y_m": 30.0},
     ]
 
+    # Ball near player 10
     ball = (20.5, 30.2)
     possessor = get_ball_possessor(players, ball)
     assert possessor is not None
     assert possessor["player_id"] == 10
 
+    # Ball far from everyone
     ball_far = (80.0, 10.0)
     assert get_ball_possessor(players, ball_far) is None
 
@@ -41,16 +40,23 @@ def test_pass_detection_synthetic():
 
 
 def test_shot_detection_synthetic():
+    # Ball traveling fast towards goal at x=105.0, y=34.0
     ball_positions = [
         {"frame_id": 1, "timestamp": 0.0, "pitch_x_m": 80.0, "pitch_y_m": 34.0, "player_id": 9, "team_id": "team-A"},
         {"frame_id": 2, "timestamp": 0.04, "pitch_x_m": 82.0, "pitch_y_m": 34.0, "player_id": 9, "team_id": "team-A"},
-    ]
+    ]  # dx = 2m in 0.04s -> 50 m/s
 
+    # detect_shots() does not assume left_to_right.
+    # The direction must be supplied, because it is only knowable per team
+    # and it flips at half time -- see
+    # ai/computer_vision/tactical_analysis/attacking_direction.py.
     shots = detect_shots(ball_positions, fps=25.0,
                          direction_by_team={"team-A": "left_to_right"})
     assert len(shots) == 1
     assert shots[0]["event_type"] == "shot"
     assert shots[0]["player_id"] == 9
+    # Nominal geometry here (no goalpost detections supplied) -- and the
+    # event says so rather than presenting it as measured.
     assert shots[0]["metadata_json"]["goal_geometry_source"] == "nominal"
 
 
@@ -81,7 +87,7 @@ def test_shot_detection_uses_detected_goal_mouth_over_nominal():
     events = detect_shots(ball_positions, fps=25.0,
                           direction_by_team={"team-A": "left_to_right"},
                           goal_mouths=measured)
-    assert events[0]["event_type"] != "shot"
+    assert events[0]["event_type"] != "shot"          # 34 m is nowhere near a mouth at 10-17 m
     assert events[0]["metadata_json"]["goal_geometry_source"] == "detected"
     assert events[0]["metadata_json"]["goal_mouth_observations"] == 40
 

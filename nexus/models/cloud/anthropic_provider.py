@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -23,6 +24,10 @@ _DEFAULT_BASE_URL = "https://api.anthropic.com"
 _ANTHROPIC_VERSION = "2023-06-01"
 _DEFAULT_MAX_TOKENS = 4096
 
+# Anthropic doesn't ship a lightweight, dependency-free tokenizer, so token
+# counts are estimated with the common ~4 chars/token heuristic (same
+# approximation OllamaRuntime uses). This is a rough estimate, not an exact
+# count — real usage figures always come from the API response's `usage`.
 _CHARS_PER_TOKEN_ESTIMATE = 4
 
 
@@ -42,7 +47,7 @@ class AnthropicProvider(AIProvider):
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
-        self._transport = transport
+        self._transport = transport  # test seam: inject httpx.MockTransport
 
     def _require_api_key(self) -> str:
         if not self._api_key:
@@ -153,6 +158,11 @@ class AnthropicProvider(AIProvider):
         max_tokens: int | None = None,
         tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[GenerationChunk]:
+        # Phase 5 scope boundary: chat.py's tool-calling loop only ever
+        # calls non-streaming generate() (see chat.py's docstring on why),
+        # so streamed tool_use content-block deltas are accepted here for
+        # API completeness but not accumulated — GenerationChunk has no
+        # tool_calls field to carry them, only plain text deltas.
         api_key = self._require_api_key()
         self._check_context_window(messages, model_id)
         system_text, chat_messages = self._split_system(messages)
@@ -224,6 +234,8 @@ class AnthropicProvider(AIProvider):
 
 
 def _to_anthropic_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Anthropic's tool schema uses "input_schema" where the canonical
+    # (OpenAI-style) shape uses "parameters" — everything else lines up.
     return [
         {
             "name": tool["name"],

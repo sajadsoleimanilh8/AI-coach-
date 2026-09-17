@@ -143,7 +143,7 @@ async def test_extraction_batches_chunks() -> None:
 
     await extractor.extract(["chunk"] * 9)
 
-    assert provider.call_count == 3
+    assert provider.call_count == 3  # ceil(9 / 4)
 
 
 @pytest.mark.asyncio

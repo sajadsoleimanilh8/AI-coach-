@@ -49,7 +49,7 @@ async def _setup(tmp_path, records: list[InteractionRecord], *, eval_run: EvalRu
         PrivacyClassifier(),
         store,
         datasets_dir="nexus/evaluation/datasets",
-        templates_dir=tmp_path / "templates",
+        templates_dir=tmp_path / "templates",  # empty unless a test writes one
     )
     return builder
 
@@ -74,8 +74,8 @@ async def test_verified_high_source_requires_band_and_score(tmp_path) -> None:
         tmp_path,
         [
             _interaction(verification_band="high", verification_score=0.9),
-            _interaction(verification_band="high", verification_score=0.5),
-            _interaction(verification_band="medium", verification_score=0.95),
+            _interaction(verification_band="high", verification_score=0.5),  # under threshold
+            _interaction(verification_band="medium", verification_score=0.95),  # wrong band
         ],
     )
 
@@ -101,6 +101,10 @@ async def test_a_record_is_not_mined_twice_by_both_interaction_sources(tmp_path)
 
 @pytest.mark.asyncio
 async def test_eval_failure_source_pairs_the_case_with_its_expected_answer(tmp_path) -> None:
+    # A real, committed case. Pinned rather than picked arbitrarily: some
+    # cases carry deliberate PII (the privacy-routing ones) and would be
+    # correctly dropped at export, which would make this test about
+    # something else entirely.
     failing_case_id = "routing-003"
 
     run = EvalRun(
@@ -129,6 +133,8 @@ async def test_eval_failure_source_pairs_the_case_with_its_expected_answer(tmp_p
 
     examples, stats = await builder.build(include_sources=["eval_failure"])
 
+    # Only the FAILED case becomes a training example — a passing case has
+    # nothing to teach.
     assert stats.total == 1
     assert examples[0].source == "eval_failure"
     assert examples[0].messages[0]["role"] == "user"
@@ -145,7 +151,7 @@ async def test_synthetic_source_reads_committed_templates(tmp_path) -> None:
 
     _examples, stats = await builder.build(include_sources=["synthetic"])
 
-    assert stats.total >= 50
+    assert stats.total >= 50  # five template files, 10-30 examples each
     assert set(stats.by_source) == {"synthetic"}
     assert "health_safe" in stats.by_task_type
 
@@ -162,12 +168,12 @@ async def test_private_records_are_excluded_even_when_their_stored_label_says_pu
         [
             _interaction(
                 user_feedback=1,
-                privacy_level="public",
+                privacy_level="public",  # the STORED label is wrong
                 prompt_json=json.dumps(
                     [{"role": "user", "content": "Email me at alice@example.com"}]
                 ),
             ),
-            _interaction(user_feedback=1),
+            _interaction(user_feedback=1),  # genuinely public
         ],
     )
 

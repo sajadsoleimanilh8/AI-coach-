@@ -1,4 +1,11 @@
-"""The annotated render, and the colour rule it shares with the frontend."""
+"""The annotated render, and the colour rule it shares with the frontend.
+
+team_colour_bgr() replaced two independent substring matches -- the minimap's
+`includes('a')` and the video overlay's `includes('b')`. Every team id in this
+system is "team-home" or "team-away": both contain an "a" (in "team") and
+neither contains a "b", so one helper painted both teams the same colour and
+so did the other. These tests pin the exact-match rule so that cannot return.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,8 +17,8 @@ from backend.pipeline.overlay_video import (
     FIELD_BGR,
     GOALPOST_BGR,
     PITCH_LINE_BGR,
-    UNASSIGNED_BGR,
     TEAM_COLOURS_BGR,
+    UNASSIGNED_BGR,
     find_overlay_output,
     media_type_for,
     overlay_output_path,
@@ -66,12 +73,14 @@ def test_the_two_teams_get_different_colours():
     home = team_colour_bgr("team-home")
     away = team_colour_bgr("team-away")
 
+    # The whole point. Substring matching made these equal.
     assert home != away
     assert home == TEAM_COLOURS_BGR["team-home"]
     assert away == TEAM_COLOURS_BGR["team-away"]
 
 
 def test_unknown_and_missing_team_ids_read_as_unassigned():
+    # Not bucketed into a team by how the id happens to be spelled.
     assert team_colour_bgr(None) == UNASSIGNED_BGR
     assert team_colour_bgr("referee") == UNASSIGNED_BGR
     assert team_colour_bgr("") == UNASSIGNED_BGR
@@ -84,6 +93,9 @@ def test_team_ids_are_matched_case_and_whitespace_insensitively():
 def test_output_path_is_beside_the_upload_and_keyed_by_video_id():
     path = overlay_output_path("/data/uploads/clip.mp4", "vid-123")
 
+    # Suffix follows the codec chain's first rung (H.264/MP4 since the VP8
+    # replacement -- see the CODEC note in overlay_video.py). The location
+    # and the id-keyed name are the parts that must not drift.
     assert path.stem == "vid-123_tracked"
     assert path.parent.name == "processed"
 
@@ -118,6 +130,8 @@ def test_missing_source_video_is_reported_not_raised(tmp_path):
         str(tmp_path / "nope.mp4"), [[]], tmp_path / "out.webm", fps=25.0,
     )
 
+    # A render failure must never fail a run whose metrics are already
+    # computed and committed -- see render_overlay_video's docstring.
     assert result.path is None
     assert "missing" in (result.skipped_reason or "")
 
@@ -145,10 +159,15 @@ def test_render_writes_a_playable_file_at_the_configured_width(
     assert result.skipped_reason is None, result.skipped_reason
     assert result.frames_written > 0
 
+    # The written path is whichever codec actually opened, so it is read off
+    # the result rather than assumed from what was requested.
     written = Path(result.path)
     assert written.exists() and written.stat().st_size > 0
     assert result.codec
 
+    # The artifact check that the render itself now performs: the file must
+    # decode back, not merely exist. A writer that accepted every frame and
+    # produced an undecodable container used to pass as a successful render.
     assert result.verified_frames and result.verified_frames > 0
     assert result.width == expected_width
 
@@ -207,6 +226,7 @@ def test_the_ball_marker_is_actually_drawn(tmp_path):
         drawn.append((centre, colour))
         return original_circle(image, centre, radius, colour, thickness, *args, **kwargs)
 
+    # Patch on the cv2 module the renderer imports locally.
     monkey = pytest.MonkeyPatch()
     try:
         monkey.setattr(cv2, "circle", spy_circle)
@@ -367,7 +387,7 @@ def test_the_hud_names_every_model_and_marks_the_silent_ones():
 def test_the_hud_still_accepts_the_legacy_boolean_calibration_map():
     """Callers that pass `{frame: bool}` predate the CalibrationState upgrade
     and must keep rendering the same valid/none label."""
-    cv2 = pytest.importorskip("cv2")
+    pytest.importorskip("cv2")
     import backend.pipeline.overlay_video as overlay_module
 
     assert overlay_module._calibration_flag(True) == "valid"

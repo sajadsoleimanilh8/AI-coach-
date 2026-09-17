@@ -26,10 +26,16 @@ class Weakness:
 
 
 def sign_corrected_deviation(dimension: str, current: float, baseline: float) -> float:
+    # Positive must ALWAYS mean "worse than baseline" regardless of whether
+    # this dimension is higher-is-better or higher-is-worse, so callers can
+    # filter/sort on deviation without knowing which kind a dimension is.
     raw_diff = current - baseline
     return raw_diff if dimension in INVERTED_DIMENSIONS else -raw_diff
 
 
+# Public since ScenarioSimulator has to apply the identical sign convention
+# when it recomputes deviations under a hypothetical delta — two different
+# implementations of "worse" would silently disagree on inverted dimensions.
 _sign_corrected_deviation = sign_corrected_deviation
 
 
@@ -51,7 +57,7 @@ class WeaknessEngine:
     to surface dimensions that are meaningfully worse than usual —
     "meaningfully" gated by BOTH min_confidence and min_deviation so a
     single noisy data point never gets reported as an established
-    """
+    weakness (principle 5)."""
 
     def __init__(
         self,
@@ -83,6 +89,10 @@ class WeaknessEngine:
                 continue
 
             deviation = _sign_corrected_deviation(dimension, dim_state.value, baseline.value)
+            # Only positive (worse-than-baseline) deviations are weaknesses —
+            # an improvement of the same magnitude is not a "weakness" just
+            # because it's far from baseline, so this is deviation >=
+            # min_deviation, not abs(deviation) >= min_deviation.
             if deviation < self._min_deviation:
                 continue
 

@@ -1,19 +1,33 @@
 """
 Trains every registered model sequentially, using each model's own config.
+
+Order is deliberate: smallest/most pipeline-critical first, so usable
+checkpoints and real metrics exist early instead of after the longest run.
+`player` is last because it is by far the largest (12,248 training images at
+imgsz 960).
+
+A failure in one model does not abort the rest -- the failure is recorded
+and reported in the summary at the end, so an overnight run does not lose
+four good models to one bad one.
+
+    python -m scripts.train_all
+    python -m scripts.train_all --only ball calibration
+    python -m scripts.train_all --epochs 5        # smoke-test everything
 """
 
 from __future__ import annotations
 
 import argparse
-import sys
 import traceback
-from datetime import datetime, timezone
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from datetime import UTC, datetime
 
 from ai.computer_vision.train_common import train_model  # noqa: E402
 
+# `player` is deliberately NOT in this list. It is the ~7-hour run and is
+# trained in operator-controlled parts instead, one at a time with a
+# cooldown between them -- see training/train_player.py's --part flag.
+# Auto-starting it here would violate that workflow. Pass it explicitly
+# (--only player) only if you really want one uninterrupted 7-hour run.
 ORDER = ["ball", "calibration", "field", "goalpost"]
 
 
@@ -28,7 +42,7 @@ def main() -> int:
 
     results: list[tuple[str, str, str]] = []
     for name in models:
-        started = datetime.now(timezone.utc)
+        started = datetime.now(UTC)
         print(f"\n{'=' * 70}\n=== TRAINING {name}  ({started.isoformat()})\n{'=' * 70}", flush=True)
         try:
             outcome = train_model(name, overrides=overrides)
@@ -41,7 +55,7 @@ def main() -> int:
         except Exception as exc:                              # noqa: BLE001
             traceback.print_exc()
             results.append((name, "FAILED", f"{type(exc).__name__}: {exc}"))
-        elapsed = datetime.now(timezone.utc) - started
+        elapsed = datetime.now(UTC) - started
         print(f"=== {name} finished in {elapsed}", flush=True)
 
     print(f"\n{'=' * 70}\n=== SUMMARY\n{'=' * 70}")

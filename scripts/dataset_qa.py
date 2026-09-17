@@ -1,5 +1,38 @@
 """
 Dataset QA -- content-level audit for every registered dataset.
+
+configs/registry.py::verify_dataset() is the fast STRUCTURAL gate (do the
+splits exist, are they non-empty). This script is the slow CONTENT gate: it
+opens every label file and every image header and reports what is actually
+wrong with the data.
+
+Deliberate policy: this script REPORTS, it does not delete or rewrite
+anything. Bad samples are listed with their paths so a human decides. A QA
+pass that silently drops samples hides exactly the problems it exists to
+find.
+
+Checks performed
+    orphans        image with no label file, label file with no image
+    empty          zero-byte / whitespace-only label files (these are legal
+                   in YOLO -- they mean "background, no objects" -- so they
+                   are counted and reported, never treated as an error)
+    malformed      wrong field count for the dataset's task, non-numeric
+                   fields, or a class id outside [0, nc)
+    degenerate     zero/negative width or height boxes
+    out_of_range   normalised coordinates outside [0, 1]
+    extreme_ar     bbox aspect ratio outside [1/20, 20]
+    tiny           bbox area < 0.0001 of the image (reported, not an error:
+                   for the ball dataset these are the whole point)
+    dup_images     byte-identical images (sha1), including across splits --
+                   a train/val duplicate is train/test leakage and is
+                   escalated
+    class_balance  instance counts per class per split
+    corrupt        images PIL cannot open or that fail verify()
+
+Usage
+    python -m scripts.dataset_qa                 # all datasets
+    python -m scripts.dataset_qa ball player     # named datasets
+    python -m scripts.dataset_qa --out docs/dataset_audit
 """
 
 from __future__ import annotations
@@ -11,13 +44,17 @@ from collections import Counter, defaultdict
 from datetime import date
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
+# Allow `python scripts/dataset_qa.py` as well as `-m scripts.dataset_qa`.
 from configs import registry as R  # noqa: E402
 
 EXTREME_AR = 20.0
 TINY_AREA = 1e-4
 
+# Windows MAX_PATH. Roboflow exports embed the original (often absurdly
+# long) source filename into every export, and several goalpost samples
+# blow past 260 characters, at which point the normal Win32 API refuses to
+# open them -- os.scandir still LISTS them, so they look present right up
+# until something tries to read one. Training hits this too, not just QA.
 MAX_PATH = 260
 
 
@@ -37,10 +74,10 @@ def _expected_fields(task: str, kpt_shape) -> int | None:
     (a polygon of any vertex count), so it returns None and is checked by a
     different rule."""
     if task == "detect":
-        return 5
+        return 5                                    # cls cx cy w h
     if task == "pose":
         return 5 + int(kpt_shape[0]) * int(kpt_shape[1])
-    return None
+    return None                                     # segment
 
 
 def audit_dataset(name: str) -> dict:
@@ -75,6 +112,7 @@ def audit_dataset(name: str) -> dict:
             stats["labels"] = len(label_stems)
 
             for img in images:
+                # -- duplicate / corrupt image ------------------------
                 if len(str(img)) > MAX_PATH:
                     report["issues"]["long_path"].append(
                         f"{len(str(img))} chars: {img}")
@@ -129,6 +167,17 @@ def audit_dataset(name: str) -> dict:
                     report["class_counts"][split][cls] += 1
 
                     if expected is not None and len(vals) != expected:
+                        # A detect-task row carrying more than 5 fields is a
+                        # POLYGON, not a broken box. Ultralytics' own
+                        # verify_image_label() converts polygon labels to
+                        # their bounding box (segments2boxes) when the task
+                        # is detect, so these train correctly -- they are a
+                        # mixed-export inconsistency, not corruption.
+                        # Verified against the goalpost set: 2,750 rows are
+                        # 5-field boxes and 252 are 11/13/15-field polygons.
+                        # Pose is different: a wrong field count there means
+                        # the keypoint count disagrees with kpt_shape, which
+                        # genuinely cannot be loaded.
                         odd = len(vals) > 5 and (len(vals) - 1) % 2 == 0
                         if task == "detect" and odd:
                             report["issues"]["mixed_format"].append(
@@ -138,13 +187,33 @@ def audit_dataset(name: str) -> dict:
                             report["issues"]["malformed"].append(
                                 f"{where} has {len(vals)} fields, expected {expected}")
                         continue
-                    if expected is None:
+                    if expected is None:                     # segment
                         coords = vals[1:]
                         if len(coords) < 6 or len(coords) % 2 != 0:
                             report["issues"]["malformed"].append(
                                 f"{where} polygon has {len(coords)} coords "
                                 f"(need an even count >= 6)")
                             continue
+                        # Ultralytics does NOT clip out-of-range segments at
+                        # load time -- it REJECTS the label and drops the image
+                        # as corrupt:
+                        #
+                        #   ultralytics/data/utils.py:271-272
+                        #     points = lb[:, 1:]   # xywh via segments2boxes
+                        #     assert points.max() <= 1.01
+                        #     assert lb.min()   >= -0.01
+                        #
+                        # Treating these as an informational "off_frame" note
+                        # once produced a false PASS for the field dataset
+                        # while 53% of its training images were being silently
+                        # discarded.
+                        #
+                        # Note the check applies to the box DERIVED from
+                        # the polygon, not the vertices, so we emulate
+                        # segments2boxes here rather than testing vertices
+                        # directly -- a polygon spanning -0.011..1.007 has
+                        # width 1.018 and fails even though no single
+                        # vertex is far out of range.
                         xs, ys = coords[0::2], coords[1::2]
                         x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
                         box = [(x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1]
@@ -155,11 +224,15 @@ def audit_dataset(name: str) -> dict:
                                 f"WILL DROP this image as corrupt")
                         continue
 
+                    # -- detect / pose share the cx cy w h prefix ------
                     cx, cy, w, h = vals[1:5]
                     if w <= 0 or h <= 0:
                         report["issues"]["degenerate"].append(
                             f"{where} w={w} h={h}")
                         continue
+                    # Same ultralytics tolerance as above, applied to the
+                    # detect/pose coordinate block. Anything outside it
+                    # means the image is DROPPED at load, not clipped.
                     checked = vals[1:5] if task == "detect" else vals[5:]
                     if checked and (max(checked) > 1.01 or min(checked) < -0.01):
                         report["issues"]["out_of_range"].append(
@@ -178,13 +251,19 @@ def audit_dataset(name: str) -> dict:
 
             report["splits"][key] = stats
 
-    for digest, occurrences in report["hash_index"].items():
+    # -- duplicates, with train/val leakage escalated ------------------
+    for _digest, occurrences in report["hash_index"].items():
         if len(occurrences) > 1:
             splits = {o.split(":")[0] for o in occurrences}
             label = "LEAKAGE across splits" if len(splits) > 1 else "within split"
             report["issues"]["dup_images"].append(
                 f"[{label}] {len(occurrences)}x identical: {', '.join(occurrences[:6])}"
                 + (" ..." if len(occurrences) > 6 else ""))
+    # Severity-sort so the truncated sample in the rendered report shows
+    # LEAKAGE first. Without this, cross-split duplicates can sit past the
+    # 15-item display cut-off and the report reads as clean while the
+    # summary count says otherwise -- which is exactly what happened on the
+    # ball set (114 leakage groups, none visible in the printed sample).
     report["issues"]["dup_images"].sort(key=lambda s: (0 if "LEAKAGE" in s else 1, s))
     del report["hash_index"]
     return report
@@ -196,6 +275,9 @@ def render_markdown(rep: dict) -> str:
     total_inst = sum(s["instances"] for s in rep["splits"].values())
     issues = rep["issues"]
 
+    # A dataset "blocks training" only on problems that corrupt learning.
+    # tiny/extreme_ar/empty are informational -- for the ball dataset,
+    # tiny boxes ARE the signal.
     blocking = ["corrupt", "malformed", "degenerate", "out_of_range", "long_path"]
     n_block = sum(len(issues.get(k, [])) for k in blocking)
     leakage = [d for d in issues.get("dup_images", []) if "LEAKAGE" in d]

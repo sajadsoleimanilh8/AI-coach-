@@ -32,6 +32,7 @@ async def _forecast(engine, *, horizon_days: int = 7, **kwargs):
 
 @pytest.mark.asyncio
 async def test_known_slope_projects_correctly(tmp_path) -> None:
+    # +0.02/day over four clean points; current ~0.532, +0.14 over 7 days.
     engine = await _engine_with(tmp_path, "physical.energy", [0.5, 0.52, 0.54, 0.56])
 
     result = await _forecast(engine, horizon_days=7)
@@ -83,6 +84,7 @@ async def test_a_single_point_returns_insufficient_data(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_a_noisy_series_below_confidence_threshold_returns_insufficient_data(tmp_path) -> None:
+    # Enough samples, but the line explains almost none of the scatter.
     engine = await _engine_with(tmp_path, "physical.energy", [0.2, 0.9, 0.25, 0.85])
 
     forecast = (await _forecast(engine, min_trend_confidence=0.5)).forecasts[0]
@@ -128,6 +130,7 @@ async def test_horizon_is_hard_capped_at_thirty_days(tmp_path) -> None:
 
     result = await _forecast(engine, horizon_days=365)
 
+    # Capped rather than rejected — the response reports the horizon it used.
     assert result.horizon_days == 30
     assert result.forecasts[0].horizon_days == 30
 
@@ -143,6 +146,8 @@ async def test_the_cap_is_configurable(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_projection_is_clamped_to_the_scale(tmp_path) -> None:
+    # A steep slope over a long horizon would otherwise report 3.8 on a
+    # [0, 1] scale.
     engine = await _engine_with(tmp_path, "physical.energy", [0.7, 0.8, 0.9, 1.0])
 
     forecast = (await _forecast(engine, horizon_days=30)).forecasts[0]
@@ -188,9 +193,11 @@ async def test_a_user_with_no_signals_gets_an_empty_forecast(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_an_inverted_dimension_projects_on_its_raw_value(tmp_path) -> None:
+    # The sign flip belongs to trend DIRECTION, not to the projection: rising
+    # stress readings project to higher stress readings.
     engine = await _engine_with(tmp_path, "mental.stress", [0.3, 0.32, 0.34, 0.36])
 
     forecast = (await _forecast(engine, horizon_days=7)).forecasts[0]
 
     assert forecast.projected_value > forecast.current_value
-    assert forecast.trend.direction == "declining"
+    assert forecast.trend.direction == "declining"  # worse, for an inverted dimension

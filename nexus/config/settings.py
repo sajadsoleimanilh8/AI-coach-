@@ -80,6 +80,11 @@ class OpenAISettings(BaseModel):
     enabled: bool = True
     default_model: str = "gpt-4o-mini"
     timeout_seconds: int = 60
+    # Any OpenAI-compatible endpoint (vLLM, LM Studio, llama.cpp's server,
+    # LiteLLM). OpenAIProvider already accepted this; exposing it in config
+    # is what lets a fully local, tool-calling-capable model back the
+    # "openai" provider slot — OllamaRuntime deliberately drops tools, so
+    # it cannot serve agents that need tool calling.
     base_url: str = "https://api.openai.com/v1"
 
 
@@ -104,12 +109,16 @@ class CloudSettings(BaseModel):
 
 
 class GraphRagSettings(BaseModel):
+    # Off by default: entity extraction is the one genuinely LLM-dependent
+    # step in Phase 14, so enabling it changes both cost and ingest latency.
     enabled: bool = False
     max_hops: int = 2
     max_nodes: int = 20
 
 
 class RagSettings(BaseModel):
+    # "local" keeps RAG fully usable with zero cloud keys configured
+    # (embeds via Ollama) — the whole point of principle 2 (local-first).
     embedding_provider: Literal["local", "openai"] = "local"
     chunk_size: int = 800
     chunk_overlap: int = 150
@@ -122,7 +131,7 @@ class GithubToolSettings(BaseModel):
 
 
 class ToolsSettings(BaseModel):
-    enabled: list[str] = ["web_search", "python", "files", "database"]
+    enabled: list[str] = ["web_search", "files", "database"]
     max_iterations: int = 3
     python_timeout_seconds: int = 10
     files_allowed_root: str = "nexus/data/workspace"
@@ -131,6 +140,8 @@ class ToolsSettings(BaseModel):
 
 
 class OrchestrationSettings(BaseModel):
+    # Enforced by DelegationGuard inside AgentRuntime, not requested in a
+    # prompt — a cap a model can talk its way past is not a cap.
     max_depth: int = 2
     max_total_delegations: int = 6
 
@@ -164,6 +175,9 @@ class ForecastSettings(BaseModel):
 class PersonalSettings(BaseModel):
     enabled: bool = True
     forecast: ForecastSettings = ForecastSettings()
+    # Withhold personal context from cloud providers by default (principle 7)
+    # — see chat.py's use_personal_context handling for where this gate is
+    # enforced (must run AFTER routing resolves a provider).
     local_only_context: bool = True
     state_half_life_days: float = 7.0
     state_recent_window_days: float = 14.0
@@ -177,6 +191,8 @@ class PersonalSettings(BaseModel):
 class HealthSettings(BaseModel):
     enabled: bool = True
     min_sample_size: int = 3
+    # NOTE: deliberately no safety-layer toggle here — nexus/health/safety.py
+    # runs unconditionally on both the health endpoint and HealthAgent.
 
 
 class GenerationSettings(BaseModel):
@@ -190,6 +206,8 @@ class SportsSettings(BaseModel):
     enabled: bool = True
     backend_base_url: str = "http://localhost:8000"
     request_timeout_seconds: float = 30.0
+    # football metric_name -> NEXUS sports.* dimension — config-driven since
+    # the pipeline's metric set is expected to grow independently of NEXUS.
     metric_dimension_map: dict[str, str] = {
         "decision_making_score": "sports.decision_making",
         "off_ball_movement_score": "sports.positioning",
@@ -201,6 +219,8 @@ class SportsSettings(BaseModel):
 
 class VerificationSettings(BaseModel):
     enabled: bool = True
+    # Off per-request by default (verification costs extra tokens) — these
+    # task types always verify regardless of the request's `verify` flag.
     always_verify_task_types: list[str] = ["health", "research", "mathematics"]
     enable_fact_check: bool = True
     enable_judge: bool = True
@@ -209,12 +229,14 @@ class VerificationSettings(BaseModel):
 
 
 class TrainingSettings(BaseModel):
+    # Off by default: interaction logging stores full prompts and responses,
+    # which is a consent decision, not a convenience default.
     log_interactions: bool = False
     interaction_retention_days: int = 180
     dataset_output_dir: str = "nexus/training/data"
     exclude_privacy_levels: list[str] = ["private"]
     min_verification_score: float = 0.8
-    available_vram_gb: float = 12.0
+    available_vram_gb: float = 12.0  # RTX 5070 Ti Laptop
 
 
 class CapabilityLearningSettings(BaseModel):
@@ -224,6 +246,7 @@ class CapabilityLearningSettings(BaseModel):
 
 
 class SelfEvalSettings(BaseModel):
+    # Off by default: a self-critique is a second generation per answer.
     enabled: bool = False
     log_low_scores: bool = True
 
@@ -304,27 +327,46 @@ class NexusSettings(BaseSettings):
         )
 
     @model_validator(mode="after")
-    def _apply_ollama_base_url_override(self) -> "NexusSettings":
+        # Documented in Phase 1 spec as the standalone env var docker-compose uses
+        # to wire NEXUS to the `ollama` service, independent of the NEXUS_ prefix.
+    def _apply_ollama_base_url_override(self) -> NexusSettings:
         override = os.environ.get("OLLAMA_BASE_URL")
         if override:
             self.local.base_url = override
         return self
 
     @model_validator(mode="after")
-    def _apply_cloud_api_key_env_overrides(self) -> "NexusSettings":
+        # Standalone env vars (not NEXUS_-prefixed) so keys can be shared with
+        # other tools that already read OPENAI_API_KEY / ANTHROPIC_API_KEY, and
+        # so they're never accidentally checked into nexus.yaml.
+    def _apply_cloud_api_key_env_overrides(self) -> NexusSettings:
         openai_key = os.environ.get("OPENAI_API_KEY")
         if openai_key:
             self.cloud.openai.api_key = openai_key
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
         if anthropic_key:
             self.cloud.anthropic.api_key = anthropic_key
+        # Google's own tooling is split between these two names, so accepting
+        # only one guarantees someone loses an hour to a key that is set but
+        # ignored. GEMINI_API_KEY wins when both are present.
         gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
         if gemini_key:
             self.cloud.gemini.api_key = gemini_key
         return self
 
     @model_validator(mode="after")
-    def _apply_github_token_env_override(self) -> "NexusSettings":
+        # Same standalone-env-var pattern as OPENAI_API_KEY/ANTHROPIC_API_KEY.
+    def _apply_python_tool_env_override(self) -> NexusSettings:
+        """PythonExecutionTool executes model-supplied code with no sandbox, so it
+        is off unless an operator explicitly opts in. This is additive on purpose:
+        it can only ever turn the tool ON, never silently off."""
+        flag = os.environ.get("NEXUS_ENABLE_PYTHON_TOOL", "").strip().lower()
+        if flag in {"1", "true", "yes", "on"} and "python" not in self.tools.enabled:
+            self.tools.enabled = [*self.tools.enabled, "python"]
+        return self
+
+    @model_validator(mode="after")
+    def _apply_github_token_env_override(self) -> NexusSettings:
         token = os.environ.get("GITHUB_TOKEN")
         if token:
             self.tools.github.token = token

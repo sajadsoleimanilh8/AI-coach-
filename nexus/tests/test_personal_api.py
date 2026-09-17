@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -76,6 +76,9 @@ async def test_full_round_trip_signal_state_baselines_weaknesses(client: AsyncCl
     assert state_resp.status_code == 200
     assert "physical.energy" in state_resp.json()["dimensions"]
 
+    # The signal just recorded falls inside the recent window, which
+    # baselines deliberately exclude — so no baseline exists yet for a
+    # brand-new user, and consequently no weakness can be computed either.
     baselines_resp = await client.get("/api/personal/u3/baselines")
     assert baselines_resp.status_code == 200
     assert baselines_resp.json()["baselines"] == {}

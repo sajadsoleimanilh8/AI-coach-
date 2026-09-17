@@ -2,7 +2,11 @@ from __future__ import annotations
 
 
 def chunk_text(text: str, *, chunk_size: int = 800, overlap: int = 150) -> list[str]:
-    """Character-based sliding window chunker."""
+    """Character-based sliding window chunker.
+
+    Simple and dependency-free — semantic/AST-aware chunking is a
+    documented future improvement, not required for the Phase 4 MVP.
+    """
     if not text:
         return []
     if overlap >= chunk_size:

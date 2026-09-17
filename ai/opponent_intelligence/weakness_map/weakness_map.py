@@ -13,8 +13,9 @@ metric read as a clean bill of health.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, Sequence
+from typing import Any, Literal
 
 # Shared with nexus.sports.tactical so a "weakness" means the same thing in
 # the findings list and in the weakness map.

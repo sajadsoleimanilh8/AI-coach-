@@ -3,7 +3,9 @@ Utility math and missing-data functions for tactical analysis and player intelli
 """
 
 from __future__ import annotations
+
 import math
+
 
 def safe_ratio(numerator: float | None, denominator: float | None, default=None) -> float | None:
     """Zero-denominator guard per docs/data_analysis.md §0.7."""

@@ -12,6 +12,10 @@ _DEFAULT_INTENSITY = 0.7
 _MIN_INTENSITY = 0.2
 _MAX_INTENSITY = 1.0
 
+# Differentiated so the dimensions most directly tied to injury/burnout
+# risk (recovery, fatigue) move intensity more than the softer signals
+# (stress, sleep) — a judgment call, not derived from data, so it's kept
+# as named constants rather than buried in the arithmetic below.
 _RECOVERY_WEIGHT = 0.4
 _FATIGUE_WEIGHT = 0.3
 _STRESS_WEIGHT = 0.25
@@ -70,6 +74,8 @@ class BriefBuilder:
         profile = await self._profile_store.get_profile(user_id)
 
         if not state.dimensions:
+            # Never imply personalization that didn't happen (principle 3)
+            # — say so explicitly rather than silently using the default.
             return GenerationBrief(
                 user_id=user_id,
                 request_type=request_type,

@@ -4,6 +4,7 @@ Implementation Spec §5.1.
 """
 
 from __future__ import annotations
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -15,6 +16,11 @@ from backend.database.session import get_db
 router = APIRouter(prefix="/api/tactical", tags=["tactical"])
 team_intel_router = APIRouter(prefix="/api/team_intelligence", tags=["team_intelligence"])
 
+# The pipeline writes team-level metrics under "team-home"/"team-away" when
+# jersey-colour team assignment produces a split, and under "unassigned" only
+# when it does not (see backend/pipeline/runner.py::_score_team_intelligence).
+# The default scope here is "unassigned", so a caller that wants a split team
+# must pass ?team_id=team-home or ?team_id=team-away.
 DEFAULT_TEAM_SCOPE = "unassigned"
 
 
@@ -40,6 +46,10 @@ def get_formation(
     )
 
     if not metric:
+        # No fallback value. A made-up formation label next to a
+        # "low_upstream_confidence" badge is more misleading than an honest
+        # "not computed yet": it looks like a measurement when none exists.
+        # So a missing row is a 404, never a placeholder formation.
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No formation metric computed yet for match_id={match_id}, team_id={team_id}. "
@@ -51,7 +61,7 @@ def get_formation(
         "match_id": metric.match_id,
         "team_id": metric.team_id,
         "metric_name": metric.metric_name,
-        "value": metric.value,
+        "value": metric.value,  # TeamMetric.value property resolves value_numeric/value_label
         "method": metric.method.value,
         "confidence": metric.confidence.value,
         "confidence_score": metric.confidence_score,

@@ -4,7 +4,9 @@ FastAPI backend for video upload, processing status, database storage, and JSON 
 
 ## Database
 
-Tables are defined in SQLAlchemy models and documented in `backend/database/schema.sql`.
+Tables are defined in the SQLAlchemy models (`backend/database/models.py`) and
+documented in `docs/database_schema.md`. Schema changes go through Alembic:
+`alembic revision --autogenerate -m "..."` then `alembic upgrade head`.
 
 - `videos`: uploaded video file records
 - `processing_jobs`: queue/status/progress for each video

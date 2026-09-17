@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from nexus.core.vector_store import RetrievedChunk
 from nexus.verification.types import CheckResult, CheckStatus
@@ -16,8 +16,11 @@ class CheckContext:
     evidence: list[RetrievedChunk] | None = None
 
 
+# ---------------------------------------------------------------------- #
+# check_arithmetic
+# ---------------------------------------------------------------------- #
 
-_RELATIVE_TOLERANCE = 0.01
+_RELATIVE_TOLERANCE = 0.01  # 1% — absorbs the model's own rounding, not a real error
 
 _ARITHMETIC_PATTERNS: list[tuple[re.Pattern[str], Callable[[float, float], float]]] = [
     (re.compile(r"(-?\d+(?:\.\d+)?)\s*\+\s*(-?\d+(?:\.\d+)?)\s*=\s*(-?\d+(?:\.\d+)?)"), lambda a, b: a + b),
@@ -82,6 +85,9 @@ def check_arithmetic(context: CheckContext) -> CheckResult:
     )
 
 
+# ---------------------------------------------------------------------- #
+# check_citation_support
+# ---------------------------------------------------------------------- #
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 _WORD_RE = re.compile(r"[a-z0-9]+")
@@ -134,7 +140,15 @@ def check_citation_support(context: CheckContext) -> CheckResult:
     )
 
 
+# ---------------------------------------------------------------------- #
+# check_internal_contradiction
+# ---------------------------------------------------------------------- #
 
+# Subject capture is deliberately bounded to 1-2 words immediately before
+# the verb (not "as much preceding text as fits") — an unbounded/greedy
+# capture lets leftward context bleed into the subject (e.g. "The score"
+# vs. "Later the score" for the same actual subject "score"), which
+# silently defeats same-subject grouping below.
 _NUMERIC_ASSERTION_RE = re.compile(
     r"\b([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\s+(?:is|was|equals)\s+(-?\d+(?:\.\d+)?)\b"
 )
@@ -185,12 +199,20 @@ def check_internal_contradiction(context: CheckContext) -> CheckResult:
             name="internal_contradiction", status=CheckStatus.PASS, weight=_DEFAULT_WEIGHT,
             detail=f"Checked {checked_count} repeated assertion(s); no contradiction found.",
         )
+    # Deliberately conservative (documented, not accidental): the absence
+    # of a detected pattern doesn't prove the text is consistent, it only
+    # means this cheap heuristic found nothing repeatable to compare — a
+    # false FAIL here would be far more damaging to trust than an honest
+    # "couldn't check", so this biases toward INCONCLUSIVE.
     return CheckResult(
         name="internal_contradiction", status=CheckStatus.INCONCLUSIVE, weight=_DEFAULT_WEIGHT,
         detail="No repeated same-subject assertion found to compare for contradiction.",
     )
 
 
+# ---------------------------------------------------------------------- #
+# check_unsupported_certainty
+# ---------------------------------------------------------------------- #
 
 _CERTAINTY_RE = re.compile(
     r"\b(definitely|guaranteed|100% certain|always|never|there is no chance|"
@@ -228,7 +250,17 @@ def check_unsupported_certainty(context: CheckContext) -> CheckResult:
     )
 
 
+# ---------------------------------------------------------------------- #
+# check_refusal_consistency
+# ---------------------------------------------------------------------- #
 
+# Subject capture has no anchor on its right side (unlike _ASSERTION_RE's
+# forced " is "), so neither pure greedy nor pure non-greedy word-count
+# bounding works: greedy over-captures trailing clauses ("winner without
+# more data"), non-greedy under-captures multi-word subjects ("exact"
+# instead of "exact score"). A negative lookahead against common
+# preposition/conjunction stop-words lets it stop at the real clause
+# boundary either way, capturing exactly the noun phrase.
 _REFUSAL_STOPWORDS = (
     "without|with|in|on|at|before|after|due|because|and|or|but|given|since|for|from|by"
 )
@@ -237,6 +269,10 @@ _REFUSAL_RE = re.compile(
     rf"(?:the\s+)?([a-z]+(?:\s+(?!(?:{_REFUSAL_STOPWORDS})\b)[a-z]+){{0,2}})",
     re.IGNORECASE,
 )
+# Predicate class includes "-" — a score like "3-1" is a realistic
+# assertion value that a plain [a-z0-9 ] class silently fails to match
+# past the hyphen, making the whole assertion invisible to the refusal-
+# contradiction comparison below.
 _ASSERTION_RE = re.compile(
     r"\bthe\s+([a-z][a-z0-9 ]{2,40}?)\s+is\s+([a-z0-9][a-z0-9 \-]{0,40}?)(?:[.,;]|$)", re.IGNORECASE
 )
@@ -264,6 +300,7 @@ def check_refusal_consistency(context: CheckContext) -> CheckResult:
     )
 
 
+# Module-level so new checks are added here without touching the engine.
 DETERMINISTIC_CHECKS: list[Callable[[CheckContext], CheckResult]] = [
     check_arithmetic,
     check_citation_support,

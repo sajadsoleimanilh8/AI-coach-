@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -105,17 +106,20 @@ async def client_and_provider(
         provider_manager = ProviderManager(
             {"local": _FakeLocalProvider(), "openai": fake_provider}
         )
-        app.state.provider_manager = provider_manager
+        app.state.services.provider_manager = provider_manager
         fake_router = ModelRouter(provider_manager, list_models())
-        app.state.router = fake_router
+        app.state.services.router = fake_router
 
         tool_registry = ToolRegistry({"files": _FakeFilesTool()})
-        app.state.tool_registry = tool_registry
-        app.state.agent_runtime = AgentRuntime(
+        app.state.services.tool_registry = tool_registry
+        # Lifespan already built an agent_runtime bound to the real local
+        # router/tool_registry — swap it for one bound to the fakes above,
+        # the same way other integration tests override app.state.services.router.
+        app.state.services.agent_runtime = AgentRuntime(
             fake_router,
             tool_registry,
-            max_iterations=app.state.settings.agents.max_iterations,
-            cost_tracker=app.state.cost_tracker,
+            max_iterations=app.state.services.settings.agents.max_iterations,
+            cost_tracker=app.state.services.cost_tracker,
         )
 
         transport = ASGITransport(app=app)
@@ -153,7 +157,7 @@ async def test_list_agents_respects_the_enabled_allowlist(
     client_and_provider: tuple[AsyncClient, _FakeAgentProvider, Any],
 ) -> None:
     client, _provider, app = client_and_provider
-    app.state.settings.agents.enabled = ["research"]
+    app.state.services.settings.agents.enabled = ["research"]
 
     response = await client.get("/api/agents")
 
@@ -166,6 +170,11 @@ async def test_run_agent_returns_a_well_formed_response(
 ) -> None:
     client, provider, _app = client_and_provider
 
+    # Uses "coding" rather than "research" deliberately — ResearchAgent's
+    # prepare_context() calls the real rag_service (embeddings via Ollama),
+    # which this test's fixture doesn't stub out; CodingAgent has no such
+    # external dependency, so it isolates what this test actually checks:
+    # the shape of a completed AgentRunResponse.
     response = await client.post(
         "/api/agents/coding/run",
         json={"goal": "What is the capital of France?", "user_id": "u1"},

@@ -1,5 +1,21 @@
 """
 Pre-match readiness assessments, read from the football backend over HTTP.
+
+Same integration seam and the same rules as HttpSportsDataAdapter in
+nexus/sports/adapter.py: nexus/ never imports backend/'s models or touches
+its database, so the two codebases stay independently deployable and this can
+point at a remote football backend. A connection failure or a 5xx raises
+ProviderUnavailableError -- it never degrades into a guessed or default
+assessment, because a fabricated readiness number is worse than no number.
+
+A 404 is different from an outage and is treated as such: it means this
+player has not submitted a questionnaire yet, which is normal state, not a
+backend failure. That distinction mirrors adapter.py's _get_formation, which
+already separates "not computed yet" from "unreachable".
+
+Nothing here computes or adjusts a score. Every number in PreMatchAssessment
+is copied verbatim from what the backend already computed deterministically
+in ai/performance_ai/match_readiness_predictor/.
 """
 
 from __future__ import annotations
@@ -14,7 +30,12 @@ from nexus.core.exceptions import ProviderUnavailableError
 
 @dataclass(frozen=True)
 class PreMatchAssessment:
-    """The backend's assessment contract, carried through unchanged."""
+    """The backend's assessment contract, carried through unchanged.
+
+    Deliberately a plain carrier: no derived properties, no recomputation, no
+    "helpful" rounding. If a field is wrong, it was wrong upstream, and that
+    is where it should be fixed.
+    """
 
     player_id: str
     match_id: str | None
@@ -34,7 +55,7 @@ class PreMatchAssessment:
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_json(cls, payload: dict[str, Any]) -> "PreMatchAssessment":
+    def from_json(cls, payload: dict[str, Any]) -> PreMatchAssessment:
         return cls(
             player_id=payload["player_id"],
             match_id=payload.get("match_id"),
@@ -77,6 +98,9 @@ class PreMatchAssessment:
             f"Computed at: {self.computed_at}",
         ]
         if self.notes:
+            # Passed through as the player's own words, explicitly labelled as
+            # unscored so the model does not present it as having influenced
+            # any number above.
             lines.append(
                 f"Player's free-text note (informational only, not scored): {self.notes}"
             )
@@ -95,7 +119,7 @@ class PreMatchHealthClient:
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
-        self._transport = transport
+        self._transport = transport  # test seam: inject httpx.MockTransport
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
@@ -103,7 +127,12 @@ class PreMatchHealthClient:
         )
 
     async def _get(self, path: str) -> dict[str, Any] | None:
-        """Returns the parsed body, or None on a 404."""
+        """Returns the parsed body, or None on a 404.
+
+        Raises ProviderUnavailableError for anything else -- connection
+        refused, timeout, 5xx. The caller must never receive a substituted
+        value on failure.
+        """
         async with self._client() as client:
             try:
                 response = await client.get(path)

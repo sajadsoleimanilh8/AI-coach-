@@ -5,11 +5,25 @@ from typing import Literal
 
 from nexus.evaluation.types import EvalRun, SuiteResult
 
+# The safety suite (health red-flag escalation, prohibited-output
+# blocking) gets ZERO regression tolerance — a single safety case going
+# pass->fail is a build breaker, never something "within budget" the way
+# a routing or RAG wobble might be.
 _SAFETY_SUITE = "safety"
 
 
 class ProviderModeMismatchError(ValueError):
-    """Raised when a comparison spans two different provider modes."""
+    """Raised when a comparison spans two different provider modes.
+
+    A fakes run scores exactly what its scripts dictate; a real-provider
+    run scores what live models actually did. Diffing one against the
+    other produces findings that describe the switch in providers, not any
+    change in the model — and they look identical to real regressions,
+    which is worse than no comparison at all. "unknown" (a run recorded
+    before provider mode was tracked) is never treated as compatible,
+    including with another "unknown": two untagged runs may well come from
+    different modes.
+    """
 
 
 @dataclass
@@ -44,6 +58,9 @@ def _pass_rate_findings(
 def _case_regression_findings(
     suite: str, baseline: SuiteResult, candidate: SuiteResult
 ) -> list[RegressionFinding]:
+    # Unconditional for every suite, including but not limited to safety —
+    # an individual case flipping from passing to failing is never "within
+    # tolerance", regardless of what the suite-level pass_rate does.
     baseline_by_case = {o.case_id: o for o in baseline.outcomes}
     findings = []
     for outcome in candidate.outcomes:
@@ -129,7 +146,7 @@ def compare_runs(
     for candidate_suite in candidate.suites:
         baseline_suite = baseline_suites.get(candidate_suite.suite)
         if baseline_suite is None:
-            continue
+            continue  # a new suite has nothing to regress against yet
 
         findings.extend(
             _pass_rate_findings(candidate_suite.suite, baseline_suite, candidate_suite, pass_rate_tolerance)

@@ -2,20 +2,27 @@
 Sanity checks for tracker.py + trajectory.py, using synthetic detections
 (no real video or trained YOLO checkpoint needed -- mirrors the approach in
 tactical_analysis/tests/test_homography.py).
+
+Covers:
+  1. track_detections(): a synthetic "already-detected" player moving in a
+     straight line gets a single stable player_id across frames (this is
+     the entire point of ByteTrack -- ID must not change frame to frame).
+  2. TrackedDetection.foot_point(): returns bottom-center, not box center.
+  3. trajectory.enrich_with_pitch_coordinates(): a player moving at a known
+     constant real-world speed produces the expected speed_m/s within
+     tolerance, and distance/acceleration behave sanely.
+  4. Low homography_confidence correctly drops pitch coordinates instead of
+     silently computing garbage speed on unusable positions.
+
+Run: python3 tests/test_tracking_pipeline.py
 """
 
 from __future__ import annotations
 
-import os
-import sys
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tactical_analysis"))
-
 import numpy as np
 
-from tracker import TrackedDetection, track_detections
-from trajectory import (
+from ai.computer_vision.player_tracking.tracker import TrackedDetection, track_detections
+from ai.computer_vision.player_tracking.trajectory import (
     MAX_SPEED_GAP_FRAMES,
     enrich_with_pitch_coordinates,
     sprint_count,
@@ -69,7 +76,7 @@ def test_foot_point_is_bottom_center():
         x=100.0, y=200.0, width=40.0, height=90.0, confidence=0.9,
     )
     fx, fy = det.foot_point()
-    expected = (100.0 + 20.0, 200.0 + 90.0)
+    expected = (100.0 + 20.0, 200.0 + 90.0)  # x + w/2, y + h (bottom, not center)
     print(f"  foot_point = {(fx, fy)}  expected = {expected}")
     assert (fx, fy) == expected
     print("  PASS")
@@ -80,6 +87,9 @@ def test_speed_matches_known_constant_velocity():
     print("=" * 70)
     print("TEST 3: known constant pixel velocity -> correct pitch speed")
     print("=" * 70)
+    # Identity-like homography: 10 pixels == 1 pitch meter, no rotation,
+    # so we can hand-verify the expected speed without relying on
+    # tactical_analysis's own fitting code (keeps this test independent).
     H = np.array([
         [0.1, 0.0, 0.0],
         [0.0, 0.1, 0.0],
@@ -87,7 +97,7 @@ def test_speed_matches_known_constant_velocity():
     ])
 
     fps = 25.0
-    step_px = 10.0
+    step_px = 10.0  # per frame, x-direction only
     frames = make_synthetic_detection_frames(n_frames=5, step_xy=(step_px, 0.0))
     tracked = track_detections(frames, classes=["player"])
 
@@ -96,6 +106,14 @@ def test_speed_matches_known_constant_velocity():
     )
     (player_id, traj), = trajectories.items()
 
+    # NOTE: the fixed BYTETracker (bytetrack.py) returns Kalman-filtered
+    # positions (STrack.tlbr comes from the filter's state estimate, not
+    # the raw measurement) -- this is correct, standard tracker behavior
+    # (it smooths detection jitter), but it means speed on the first couple
+    # of frames has a filter warm-up transient before converging to the
+    # true constant velocity, rather than matching it exactly frame 1.
+    # What matters downstream (ACWR, sprint counts) is convergence, not
+    # frame-1 exactness, so check that here.
     expected_speed = (step_px * 0.1) / (1.0 / fps)
     speeds = [p.speed for p in traj if p.speed is not None]
     print(f"  computed speeds (Kalman warm-up transient expected early): {[round(s, 3) for s in speeds]}")
@@ -126,7 +144,7 @@ def test_low_homography_confidence_drops_pitch_coords():
     tracked = track_detections(frames, classes=["player"])
 
     trajectories = enrich_with_pitch_coordinates(
-        tracked, match_id="test-match", H=H, homography_confidence=0.2, fps=25.0,
+        tracked, match_id="test-match", H=H, homography_confidence=0.2, fps=25.0,  # below 0.6 threshold
     )
     (player_id, traj), = trajectories.items()
     print(f"  all pitch_x_m are None: {all(p.pitch_x_m is None for p in traj)}")
@@ -216,7 +234,7 @@ def test_speed_uses_frame_gap_not_one_frame_interval():
     print("=" * 70)
     H = np.array([[0.1, 0.0, 0.0], [0.0, 0.1, 0.0], [0.0, 0.0, 1.0]])
     fps = 25.0
-    step_px = 10.0
+    step_px = 10.0  # per frame, x-direction only
     frames = make_synthetic_detection_frames(n_frames=3, step_xy=(step_px, 0.0))
     tracked = track_detections(frames, classes=["player"])
 

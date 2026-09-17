@@ -1,4 +1,17 @@
-"""VideoAnalysisService against the football backend's REAL routes."""
+"""VideoAnalysisService against the football backend's REAL routes.
+
+The service previously called `POST /api/video/process` and
+`GET /api/video/status/{job_id}`; neither exists. The real routes are
+`POST /api/videos/upload` (multipart) and `GET /api/processing/{job_id}`
+(backend/api/main.py:105 and :205).
+
+These tests assert the wire contract -- method, path, multipart encoding
+and the real response field names from backend/api/schemas.py -- because a
+compile-clean client calling a 404 is exactly the failure being fixed. The
+mock replies are copied from `VideoUploadResponse` and
+`ProcessingStatusResponse`, so if those schemas change these tests fail
+rather than the integration silently rotting again.
+"""
 from __future__ import annotations
 
 import httpx
@@ -71,11 +84,12 @@ async def test_submit_posts_multipart_to_the_real_upload_route(clip):
     status = await _service(handler).submit(video_path_or_url=str(clip), match_id="requested-id")
 
     assert seen["method"] == "POST"
-    assert seen["path"] == "/api/videos/upload"
+    assert seen["path"] == "/api/videos/upload"          # not /api/video/process
     assert seen["content_type"].startswith("multipart/form-data")
     assert b"fake-video-bytes" in seen["body"]
     assert b'name="file"' in seen["body"]
     assert b'name="metadata"' in seen["body"]
+    # The backend creates the Match row, so its id wins over the caller's.
     assert status.match_id == "match-backend-assigned"
     assert status.job_id == "job-1"
     assert status.state == "queued"
@@ -91,8 +105,10 @@ async def test_status_gets_the_real_processing_route(clip):
 
     status = await _service(handler).status("job-1")
 
-    assert seen["path"] == "/api/processing/job-1"
+    assert seen["path"] == "/api/processing/job-1"        # not /api/video/status/job-1
     assert status.state == "processing"
+    # 45 (percent, int) must arrive as 0.45, since the dataclass renders it
+    # with `{progress:.0%}`.
     assert status.progress == pytest.approx(0.45)
 
 
@@ -116,6 +132,7 @@ async def test_full_flow_upload_poll_then_build_report(clip):
 
     assert calls[0] == "POST /api/videos/upload"
     assert all(c == "GET /api/processing/job-1" for c in calls[1:])
+    # build_report ran against the BACKEND's match id, not the requested one.
     assert coach.calls == [("match-backend-assigned", 7)]
     assert report.match_id == "match-backend-assigned"
     assert report.narrative == "stub narrative"

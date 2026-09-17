@@ -1,4 +1,17 @@
-"""The heatmap's two coordinate spaces must stay distinguishable."""
+"""The heatmap's two coordinate spaces must stay distinguishable.
+
+`space=image` exists because on all current footage calibration never
+validates, so no PlayerTracking row carries pitch_x_m/pitch_y_m and the pitch
+heatmap is correctly but permanently empty. Binning the pixel positions those
+same rows DO carry answers "where in frame was this player" without inventing
+a coordinate.
+
+The hazard the feature introduces is mislabelling: a pixel grid presented as
+a pitch grid is exactly the fabrication the empty pitch grid exists to
+prevent. These tests pin that the two are never confused -- image space must
+never be reachable by default, must report its own frame extent, and must not
+borrow the pitch grid's validity gate.
+"""
 from __future__ import annotations
 
 import pytest
@@ -59,6 +72,7 @@ def test_pitch_space_is_empty_when_calibration_never_validated(db):
     assert result["space"] == "pitch"
     assert result["cells"] == []
     assert result["sample_size"] == 40
+    # The rows exist; none are usable in metres. Both facts are reported.
     assert result["usable_sample_size"] == 0
     assert result["frame_width_px"] is None
 
@@ -73,12 +87,16 @@ def test_image_space_bins_the_pixels_the_same_rows_carry(db, monkeypatch):
     assert result["cells"], "pixel positions exist, so image space must produce cells"
     assert result["usable_sample_size"] == 40
     assert (result["frame_width_px"], result["frame_height_px"]) == (1280, 720)
+    # Not gated on calibration: a pixel position is not a projection of
+    # anything, so the homography's validity has no bearing on it.
     assert result["confidence"] != "low_upstream_confidence"
 
 
 def test_image_space_is_never_the_default(db):
     match_id = _match_with_pixels_only(db)
 
+    # The pitch reading is the real one; a caller must ask for image space
+    # explicitly or it would silently receive pixels labelled as position.
     assert _heatmap(db, match_id, 7, "pitch")["space"] == "pitch"
 
 
@@ -88,6 +106,8 @@ def test_image_space_without_frame_dimensions_returns_empty_not_guessed(db, monk
 
     result = _heatmap(db, match_id, 7, "image")
 
+    # Deriving an extent from the observed pixel spread would make each
+    # grid's meaning depend on where the player happened to run.
     assert result["cells"] == []
     assert result["usable_sample_size"] == 0
     assert result["frame_width_px"] is None

@@ -11,6 +11,9 @@ class ResearchAgent(Agent):
     description = "Investigates a question using web search and document retrieval."
     allowed_tools = ["web_search", "files"]
     task_type = TaskType.RESEARCH
+    # The one agent whose output is most citation-dependent and most
+    # load-bearing for the user — every other agent is unchanged
+    # (verify_output defaults to False on the base class).
     verify_output = True
 
     def system_prompt(self, context: AgentContext) -> str:
@@ -30,8 +33,15 @@ class ResearchAgent(Agent):
         if not retrieved:
             return []
 
+        # Stashed for AgentRuntime to pick up as verification evidence
+        # (verify_output=True above) — AgentContext's fixed fields don't
+        # carry RAG results, so context.extra is the one channel available
+        # to hand this forward to the runtime after prepare_context() returns.
         context.extra["retrieved_evidence"] = retrieved
 
+        # Same delimited format chat.py's _apply_rag() uses, so retrieved
+        # chunks read consistently whether they reach the model via /api/chat
+        # or via this agent.
         context_lines = "\n".join(
             f"[{i + 1}] {chunk.chunk_text}" for i, chunk in enumerate(retrieved)
         )

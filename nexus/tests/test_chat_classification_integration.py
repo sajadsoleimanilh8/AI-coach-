@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -78,9 +78,12 @@ async def _make_client(app) -> AsyncIterator[AsyncClient]:
         provider_manager = ProviderManager(
             {"local": FakeLocalProvider(), "openai": FakeCloudProvider()}
         )
-        app.state.provider_manager = provider_manager
-        app.state.provider = provider_manager.get("local")
-        app.state.router = ModelRouter(provider_manager, list_models())
+        app.state.services.provider_manager = provider_manager
+        app.state.services.provider = provider_manager.get("local")
+        # Real ModelRouter + real model registry (mistral:7b, gpt-4o,
+        # gpt-4o-mini) so BALANCED/CODING scoring and LOCAL_ONLY overrides
+        # exercise the actual capability/cost data, not a fake registry.
+        app.state.services.router = ModelRouter(provider_manager, list_models())
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -169,7 +172,9 @@ async def test_explicit_model_id_bypasses_privacy_override(client: AsyncClient) 
 
     assert response.status_code == 200
     body = response.json()
+    # Classification still runs and is reported...
     assert body["privacy_level"] == "private"
+    # ...but explicit model_id means the user's own choice wins, not local.
     assert body["provider_name"] == "openai"
     assert body["content"] == "cloud response"
 
@@ -197,6 +202,10 @@ async def test_explicit_policy_bypasses_privacy_override(client: AsyncClient) ->
 async def test_disabled_toggles_restore_phase_2_behavior(
     client_with_classification_disabled: AsyncClient,
 ) -> None:
+    # Same email-containing query that forces LOCAL_ONLY when classification/
+    # privacy are enabled (see test above) — with both disabled, this is the
+    # escape hatch back to exact Phase 2 behavior: no classification fields,
+    # no privacy override, GENERAL-task routing only.
     response = await client_with_classification_disabled.post(
         "/api/chat",
         json={

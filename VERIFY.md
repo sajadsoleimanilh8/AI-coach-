@@ -15,7 +15,8 @@ pip install -r backend/requirements.txt
 pytest
 ```
 
-Expected: **1223 passed**.
+Expected: **1361 passed** (2026-09-17). The count moves whenever tests are
+added; what matters is zero failures.
 
 `pytest` with no arguments, from the repo root, is now the correct command.
 Two things previously made it wrong, both fixed:
@@ -97,6 +98,7 @@ cd frontend/web
 node tests/navigation.spec.mjs        # 33 assertions
 node tests/match-selection.spec.mjs   # 27 assertions
 node tests/match-analysis.spec.mjs    # 23 assertions
+node tests/coach-report.spec.mjs      # 198 assertions
 ```
 
 `match-analysis.spec.mjs` is the one that covers the video pipeline's output

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import pathlib
+import subprocess
 import sys
+import textwrap
 
 import pytest
 
@@ -16,6 +19,8 @@ from nexus.training.train import (
     render_plan,
     stratified_split,
 )
+
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 _ML_PACKAGES = ("torch", "transformers", "peft", "bitsandbytes", "accelerate", "trl", "datasets")
 
@@ -60,17 +65,50 @@ def _config_file(tmp_path) -> str:
     return str(path)
 
 
-def test_dry_run_imports_no_ml_package(tmp_path, capsys) -> None:
+def test_dry_run_imports_no_ml_package(tmp_path) -> None:
     """The whole point of the lazy-import discipline. Nothing in the ML
     stack may be imported by a dry run, so the plan and preflight stay
-    usable on a machine with no CUDA toolchain at all."""
-    for package in _ML_PACKAGES:
-        assert package not in sys.modules, f"{package} was already imported before the test"
+    usable on a machine with no CUDA toolchain at all.
 
-    main(["--dataset", _dataset(tmp_path), "--config", _config_file(tmp_path), "--dry-run"])
+    This runs in a subprocess rather than in-process on purpose. Checking
+    sys.modules in the parent only works if nothing else in the session has
+    imported torch, which made this test pass or fail based on collection
+    order -- it went red as soon as any earlier test touched the ai.* stack.
+    A fresh interpreter measures what the test actually claims: a cold
+    `python -m nexus.training.train --dry-run` pulls in no ML package.
+    """
+    probe = textwrap.dedent(
+        """
+        import json, sys
+        from nexus.training.train import main
+        main(sys.argv[1:])
+        leaked = [p for p in %r if p in sys.modules]
+        print("LEAKED:" + json.dumps(leaked))
+        """
+    ) % (_ML_PACKAGES,)
 
-    for package in _ML_PACKAGES:
-        assert package not in sys.modules, f"--dry-run imported {package}"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            probe,
+            "--dataset",
+            _dataset(tmp_path),
+            "--config",
+            _config_file(tmp_path),
+            "--dry-run",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=_REPO_ROOT,
+        timeout=120,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    marker = [ln for ln in completed.stdout.splitlines() if ln.startswith("LEAKED:")]
+    assert marker, f"probe did not report; stdout={completed.stdout!r} stderr={completed.stderr!r}"
+    leaked = json.loads(marker[-1][len("LEAKED:"):])
+    assert leaked == [], f"--dry-run imported {leaked}"
 
 
 def test_dry_run_prints_the_plan(tmp_path, capsys) -> None:
@@ -131,6 +169,10 @@ def test_plan_arithmetic(tmp_path) -> None:
 
     assert plan["example_count"] == 320
     assert plan["effective_batch_size"] == 16
+    # Steps are counted against the TRAIN half only. 320 examples at a 10%
+    # validation split leaves 288 trained on: ceil(288/16) = 18 per epoch,
+    # 54 over 3 epochs. Counting all 320 would over-report by an epoch's
+    # worth of steps and inflate the wall-time estimate with it.
     assert plan["train_example_count"] == 288
     assert plan["val_example_count"] == 32
     assert plan["total_steps"] == 54
@@ -147,6 +189,9 @@ def test_split_is_deterministic_under_a_fixed_seed(tmp_path) -> None:
 
 
 def test_a_different_seed_gives_a_different_split(tmp_path) -> None:
+    # Determinism must come from the seed, not from the function ignoring
+    # it — a split that never changes is equally reproducible and useless
+    # for checking that a result is not an artefact of one partition.
     rows = _mixed_task_type_rows()
 
     _, val_a = stratified_split(rows, val_split=0.2, seed=1)
@@ -167,6 +212,9 @@ def test_split_does_not_depend_on_row_order_in_the_file(tmp_path) -> None:
 
 
 def test_split_is_stratified_across_every_task_type(tmp_path) -> None:
+    # The failure this prevents: a plain random 10% of a small set can
+    # contain no health_safe example at all, and the eval loss is then
+    # silent about the behaviour that matters most.
     rows = _mixed_task_type_rows()
 
     train, val = stratified_split(rows, val_split=0.2, seed=42)
@@ -190,6 +238,9 @@ def test_no_row_is_in_both_halves_and_none_is_lost(tmp_path) -> None:
 
 
 def test_a_task_type_too_small_to_split_raises_loudly() -> None:
+    # One lonely example of a type cannot be on both sides. Silently
+    # dropping it from validation is what makes an eval loss misleading,
+    # so this is an error rather than a best effort.
     rows = _mixed_task_type_rows() + [{"id": "lonely", "task_type": "brand_new_type"}]
 
     with pytest.raises(StratificationError) as excinfo:
@@ -234,6 +285,7 @@ def test_find_latest_checkpoint_sorts_numerically(tmp_path) -> None:
 
     latest = find_latest_checkpoint(tmp_path)
 
+    # Lexical sorting would pick checkpoint-900 here.
     assert latest is not None and latest.name == "checkpoint-1000"
 
 
@@ -261,7 +313,7 @@ def test_throughput_monitor_warns_on_a_sustained_drop() -> None:
     for step in range(10):
         monitor.record(step, 1.0)
 
-    warning = monitor.record(10, 0.5)
+    warning = monitor.record(10, 0.5)  # thermal throttling signature
 
     assert warning is not None
     assert "THROUGHPUT DROP" in warning
@@ -269,6 +321,7 @@ def test_throughput_monitor_warns_on_a_sustained_drop() -> None:
 
 
 def test_throughput_monitor_warns_only_once() -> None:
+    # A throttling laptop would otherwise emit this every logging step for hours.
     monitor = ThroughputMonitor(baseline_window=10)
     for step in range(10):
         monitor.record(step, 1.0)
@@ -287,15 +340,19 @@ def test_throughput_monitor_ignores_a_small_dip() -> None:
 
 
 def test_throughput_monitor_needs_a_sustained_drop_not_one_slow_step() -> None:
+    # Once enough steps exist to fill the rolling window, a single stalled
+    # step is diluted rather than reported — a warning that fires on any
+    # one-off hitch is a warning users learn to ignore.
     monitor = ThroughputMonitor(baseline_window=4, rolling_window=3, warn_ratio=0.75)
     for step in range(4):
         monitor.record(step, 1.0)
     for step in range(4, 8):
         monitor.record(step, 1.0)
 
-    assert monitor.record(8, 0.3) is None
+    assert monitor.record(8, 0.3) is None  # mean of (1.0, 1.0, 0.3) = 77% of baseline
 
-    assert monitor.record(9, 0.3) is not None
+    # ...but if it stays down, it is reported.
+    assert monitor.record(9, 0.3) is not None  # mean of (1.0, 0.3, 0.3) = 53%
 
 
 def _drive_steps(
@@ -312,11 +369,14 @@ def _drive_steps(
         warning = tracker.on_step_end(start_step + offset, clock[0])
         if warning:
             warnings.append(warning)
-        clock[0] += 0.01
+        clock[0] += 0.01  # the gap between steps, which must not be timed
     return warnings
 
 
 def test_step_timing_tracker_fires_on_a_sustained_slowdown() -> None:
+    # The test the old on_log implementation could never have passed: it
+    # read train_samples_per_second, which HF emits only in the end-of-run
+    # summary, so no amount of mid-run slowdown produced a single sample.
     clock = [1000.0]
     tracker = StepThroughputTracker(
         samples_per_step=16,
@@ -325,14 +385,14 @@ def test_step_timing_tracker_fires_on_a_sustained_slowdown() -> None:
     )
 
     fast = _drive_steps(tracker, count=5, seconds_per_step=1.0, clock=clock)
-    assert fast == []
+    assert fast == []  # 16 samples/sec throughout — nothing to report
 
     slow = _drive_steps(tracker, count=4, seconds_per_step=4.0, clock=clock)
 
     assert len(slow) == 1, "a sustained 4x slowdown must warn exactly once"
     assert "THROUGHPUT DROP" in slow[0]
     assert "thermal-throttling" in slow[0]
-    assert "{save_steps}" in slow[0]
+    assert "{save_steps}" in slow[0]  # filled in by the caller that knows the config
 
 
 def test_step_timing_tracker_stays_quiet_at_a_steady_pace() -> None:
@@ -345,6 +405,10 @@ def test_step_timing_tracker_stays_quiet_at_a_steady_pace() -> None:
 
 
 def test_step_timing_tracker_discards_the_warmup_step() -> None:
+    # The first timed step still carries autotuning and allocator growth.
+    # Letting it anchor the baseline would make every later step look like
+    # a speed-up, and a genuine slowdown would have to be far worse before
+    # it registered.
     clock = [1000.0]
     tracker = StepThroughputTracker(
         samples_per_step=16,
@@ -352,7 +416,7 @@ def test_step_timing_tracker_discards_the_warmup_step() -> None:
         warmup_steps_skipped=1,
     )
 
-    _drive_steps(tracker, count=1, seconds_per_step=10.0, clock=clock)
+    _drive_steps(tracker, count=1, seconds_per_step=10.0, clock=clock)  # slow warmup step
     assert tracker.monitor.samples == []
 
     _drive_steps(tracker, count=2, seconds_per_step=1.0, clock=clock)
@@ -360,6 +424,9 @@ def test_step_timing_tracker_discards_the_warmup_step() -> None:
 
 
 def test_step_timing_tracker_measures_the_step_not_the_gap_between_steps() -> None:
+    # Checkpoint saving happens after on_step_end and before the next
+    # on_step_begin. Timing end-to-end would bill that save to the next
+    # step and report a throughput collapse that never happened.
     clock = [1000.0]
     tracker = StepThroughputTracker(
         samples_per_step=16,
@@ -369,15 +436,18 @@ def test_step_timing_tracker_measures_the_step_not_the_gap_between_steps() -> No
 
     for step in range(4):
         tracker.on_step_begin(clock[0])
-        clock[0] += 1.0
+        clock[0] += 1.0  # the step itself, constant throughout
         warning = tracker.on_step_end(step, clock[0])
-        clock[0] += 30.0
+        clock[0] += 30.0  # a checkpoint being written between steps
         assert warning is None
 
     assert [s.samples_per_second for s in tracker.monitor.samples] == [16.0] * 4
 
 
 def test_step_timing_tracker_ignores_an_end_without_a_begin() -> None:
+    # Resume-from-checkpoint and early stopping can both land an
+    # on_step_end with no matching begin; that must not divide by a
+    # missing timestamp.
     tracker = StepThroughputTracker(samples_per_step=16)
 
     assert tracker.on_step_end(0, 1000.0) is None

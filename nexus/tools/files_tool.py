@@ -31,6 +31,9 @@ class FileSystemTool(Tool):
         if not raw_path:
             return ToolResult(success=False, output="", error="Missing required argument: path")
 
+        # An absolute raw_path makes `/` discard the left operand entirely
+        # (pathlib joins to the absolute path), so the traversal guard must
+        # be the resolved-path check below, not the join itself.
         candidate = (self._allowed_root / raw_path).resolve()
         if not candidate.is_relative_to(self._allowed_root):
             return ToolResult(

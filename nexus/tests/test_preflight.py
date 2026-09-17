@@ -86,6 +86,9 @@ def test_blackwell_check_fails_loudly_when_sm120_is_absent(tmp_path, monkeypatch
     name the GPU, the torch build, the arch list, and the exact fix — a bare
     'unsupported' would leave the user guessing at the one thing that is
     actually wrong."""
+    # A current torch that was nonetheless built without Blackwell kernels
+    # (a cu121 build of 2.7) — the version gate passes, so this is squarely
+    # the arch check's failure to report.
     monkeypatch.setitem(
         sys.modules,
         "torch",
@@ -102,10 +105,10 @@ def test_blackwell_check_fails_loudly_when_sm120_is_absent(tmp_path, monkeypatch
     assert not passed
     assert "sm_120" in detail
     assert "RTX 5070 Ti" in detail
-    assert "2.7.0+cu121" in detail
-    assert "12.1" in detail
-    assert "sm_90" in detail
-    assert "download.pytorch.org/whl/cu128" in detail
+    assert "2.7.0+cu121" in detail  # the installed build
+    assert "12.1" in detail  # its CUDA version
+    assert "sm_90" in detail  # what it DOES have
+    assert "download.pytorch.org/whl/cu128" in detail  # the exact remediation
     assert "pip uninstall" in detail
 
 
@@ -118,7 +121,7 @@ def test_blackwell_check_passes_when_sm120_is_present(tmp_path, healthy_env) -> 
 
 
 def test_missing_torch_fails_with_the_install_command(tmp_path, monkeypatch) -> None:
-    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setitem(sys.modules, "torch", None)  # import torch -> ImportError
 
     result = run_preflight(_config(tmp_path), dataset_path=_dataset(tmp_path))
     _name, passed, detail = _check(result, "torch_available")
@@ -166,6 +169,7 @@ def test_bitsandbytes_not_required_when_not_quantizing(tmp_path, monkeypatch) ->
 
 
 def test_free_vram_is_compared_against_actual_free_not_total(tmp_path, monkeypatch) -> None:
+    # 12GB card with Ollama holding 9GB: total would pass, free must not.
     monkeypatch.setitem(sys.modules, "torch", _fake_torch(free_gb=3.0, total_gb=12.0))
     monkeypatch.setitem(sys.modules, "bitsandbytes", _fake_bitsandbytes())
 
@@ -175,7 +179,7 @@ def test_free_vram_is_compared_against_actual_free_not_total(tmp_path, monkeypat
     assert not passed
     assert "3.00GB" in detail
     assert "Stop Ollama" in detail
-    assert "max_seq_length" in detail
+    assert "max_seq_length" in detail  # the remediation ladder
 
 
 def test_windows_spillover_warns_without_blocking(tmp_path, healthy_env, monkeypatch) -> None:
@@ -184,6 +188,7 @@ def test_windows_spillover_warns_without_blocking(tmp_path, healthy_env, monkeyp
     result = run_preflight(_config(tmp_path), dataset_path=_dataset(tmp_path))
     _name, passed, detail = _check(result, "windows_vram_spillover")
 
+    # A warning, not a gate: it must not stop an otherwise-fine run.
     assert passed
     assert "WARNING" in detail
     assert "SILENTLY PAGE" in detail
@@ -229,6 +234,7 @@ def test_dependent_checks_are_skipped_not_cascaded(tmp_path, monkeypatch) -> Non
 
     assert "skipped" in _check(result, "blackwell_sm120_support")[2]
     assert "skipped" in _check(result, "free_vram")[2]
+    # ...but independent checks still ran, so one invocation shows everything.
     assert _check(result, "dataset")[1] is True
 
 

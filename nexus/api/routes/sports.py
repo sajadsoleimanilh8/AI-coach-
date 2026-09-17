@@ -18,13 +18,14 @@ from nexus.api.schemas import (
     TimelineSectionsSchema,
     VideoAnalyzeRequest,
 )
+from nexus.api.services import get_services
 from nexus.core.exceptions import ProviderUnavailableError
 from nexus.personal.state import PersonalStateEngine
 from nexus.sports.adapter import SportsDataAdapter
 from nexus.sports.coach import CoachAssistant, CoachReport, PreMatchCoachReport
 from nexus.sports.game_plan import GamePlan
-from nexus.sports.timeline import TIMELINE_SECTIONS
 from nexus.sports.ingest import ingest_player_metrics_as_signals
+from nexus.sports.timeline import TIMELINE_SECTIONS
 from nexus.sports.video import VideoAnalysisService
 
 router = APIRouter()
@@ -154,7 +155,7 @@ def _to_prematch_response(report: PreMatchCoachReport) -> PreMatchCoachReportRes
 
 @router.get("/sports/{match_id}/report", response_model=CoachReportResponse)
 async def get_match_report(match_id: str, request: Request) -> CoachReportResponse:
-    coach: CoachAssistant = request.app.state.coach_assistant
+    coach: CoachAssistant = get_services(request).coach_assistant
     try:
         report = await coach.build_report(match_id)
     except ProviderUnavailableError as exc:
@@ -164,7 +165,7 @@ async def get_match_report(match_id: str, request: Request) -> CoachReportRespon
 
 @router.get("/sports/{match_id}/player/{player_id}", response_model=CoachReportResponse)
 async def get_player_report(match_id: str, player_id: int, request: Request) -> CoachReportResponse:
-    coach: CoachAssistant = request.app.state.coach_assistant
+    coach: CoachAssistant = get_services(request).coach_assistant
     try:
         report = await coach.build_report(match_id, player_id)
     except ProviderUnavailableError as exc:
@@ -179,8 +180,23 @@ async def get_player_report(match_id: str, player_id: int, request: Request) -> 
 async def get_prematch_report(
     match_id: str, player_id: str, request: Request
 ) -> PreMatchCoachReportResponse:
-    """Narrates the player's latest pre-match readiness assessment."""
-    coach: CoachAssistant = request.app.state.coach_assistant
+    """Narrates the player's latest pre-match readiness assessment.
+
+    Every number in the response is computed by the football backend's
+    deterministic scorer; the LLM only writes the `narrative` field.
+
+    player_id is a string here, unlike the integer player_id on
+    /sports/{match_id}/player/{player_id} above. That is not an
+    inconsistency: the tactical route's id is a ByteTrack tracking ID scoped
+    to one processed video, while a pre-match questionnaire is submitted
+    before any tracking exists and carries the caller's own external
+    identifier. Two different ID spaces, deliberately not conflated.
+
+    404 when the player has not submitted a questionnaire -- distinct from
+    the 503 a backend outage produces, so a caller can tell "nothing to
+    report yet" from "we could not find out".
+    """
+    coach: CoachAssistant = get_services(request).coach_assistant
     try:
         report = await coach.build_prematch_report(player_id, match_id)
     except ProviderUnavailableError as exc:
@@ -205,7 +221,7 @@ async def analyze_video(request: Request) -> CoachReportResponse:
     are the same operation from the caller's side: hand over a video, get
     back a CoachReport. Which one is in use is read off the content type.
     """
-    service: VideoAnalysisService = request.app.state.video_analysis_service
+    service: VideoAnalysisService = get_services(request).video_analysis_service
     content_type = request.headers.get("content-type", "")
 
     try:
@@ -241,9 +257,9 @@ async def analyze_video(request: Request) -> CoachReportResponse:
 async def ingest_match_metrics(
     match_id: str, payload: SportsIngestRequest, request: Request
 ) -> SportsIngestResponse:
-    adapter: SportsDataAdapter = request.app.state.sports_adapter
-    state_engine: PersonalStateEngine = request.app.state.personal_state_engine
-    mapping: dict[str, str] = request.app.state.settings.sports.metric_dimension_map
+    adapter: SportsDataAdapter = get_services(request).sports_adapter
+    state_engine: PersonalStateEngine = get_services(request).personal_state_engine
+    mapping: dict[str, str] = get_services(request).settings.sports.metric_dimension_map
 
     try:
         analysis = await adapter.get_player_analysis(match_id, payload.player_id)

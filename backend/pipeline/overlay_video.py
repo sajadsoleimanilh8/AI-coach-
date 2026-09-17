@@ -1,5 +1,71 @@
 """
 Burns the pipeline's own tracking output into a playable video.
+
+WHY THIS EXISTS
+The dashboard's player served the RAW uploaded clip and drew tracking boxes
+over it as an SVG layer, rebuilt per 150-frame window. That works, but it is
+not the processed video -- it is the original video with a separate overlay
+that only exists inside this one React component. There was no artifact
+anywhere on disk that showed what the pipeline actually saw, so "watch the
+processed clip" was not a thing anyone could do, and nothing could be shared,
+downloaded, or checked outside the browser.
+
+This renders that artifact: one frame per source frame, each carrying the
+boxes, track ids and team colours that ByteTrack and jersey clustering
+actually produced for it, plus a HUD strip naming the frame, the timestamp
+and the calibration state that frame was analysed under.
+
+WHAT IT DRAWS, AND WHAT IT REFUSES TO DRAW
+Only detections that exist. A frame with no detections is written through
+unmodified rather than carrying forward the previous frame's boxes -- a
+"sticky" box would show a player the detector did not find, which is exactly
+the kind of confident-looking fabrication the rest of this pipeline is built
+to avoid. Unassigned players are drawn in neutral grey and labelled without a
+team, never defaulted into one. The HUD reports calibration as the pipeline
+measured it for that frame, including "no calibration", rather than omitting
+the row when the answer is unflattering.
+
+CODEC -- MEASURED 2026-08-16, AND THIS REPLACED VP8
+    This stage used to hardcode VP8/WebM. On the last full production run it
+    cost 555.93s of a 1179.63s job: 47% of the entire pipeline, more than
+    player detection, ball detection, calibration and pose estimation put
+    together, to produce a 568 MB file for a 9.7-minute clip.
+
+    Re-measured on this machine (375 frames of samples/sample_15s.mp4 at
+    960x540, encode only, same frames, same writer API):
+
+        avc1 (H.264)    0.38s     988 enc-fps    24.35 MB   PSNR 39-43 dB
+        VP80 (VP8)     15.95s      23 enc-fps    13.07 MB   PSNR 37-40 dB
+        VP90 (VP9)     79.25s       5 enc-fps    16.05 MB
+        mp4v           0.56s      670 enc-fps     5.03 MB   (see below)
+
+    H.264 is ~40x faster than the VP8 it replaces and decodes at HIGHER
+    fidelity. The output was verified to be genuine H.264, not a silent
+    fallback: the written file carries an `avcC` box (SPS/PPS) and re-decodes
+    to the full frame count.
+
+    The previous docstring claimed H.264 "opens but contains no decodable
+    video" here because libopenh264 is absent. libopenh264 IS absent -- the
+    loader logs a failure for it -- but this OpenCV's FFmpeg then falls back
+    to a working H.264 encoder and produces a valid file. That claim was
+    tested and is false on this build, which is why the codec changed.
+
+    mp4v is NOT in the fallback chain despite being fast and small: it is
+    MPEG-4 Part 2, which browsers reject with MEDIA_ERR_SRC_NOT_SUPPORTED.
+    A file that encodes but will not play is worse than no file, because it
+    fails in the browser rather than here where it can be reported.
+
+    VP8 is kept as the fallback rung so a build without a usable H.264
+    encoder still produces something a browser can play. Set OVERLAY_CODEC
+    to force one (e.g. OVERLAY_CODEC=VP80).
+
+CONTAINER SEEKING
+    OpenCV writes the moov atom at the END of the mp4 (there is no
+    faststart option through this API). Browsers handle that by issuing a
+    range request for the tail before playing, which works because the
+    endpoint serving this file supports HTTP range requests -- see
+    backend/api/main.py::get_processed_video_file. If that endpoint ever
+    stops honouring Range, seeking in the annotated video breaks here.
 """
 
 from __future__ import annotations
@@ -20,6 +86,12 @@ from ai.computer_vision.tactical_analysis.constants import (
 
 logger = logging.getLogger(__name__)
 
+# BGR, because that is the order cv2 draws in. These are the same three
+# colours the dashboard's SVG overlay uses, so the burned-in video and the
+# live overlay cannot disagree about which team a player is on:
+#   home       #00d4ff  neon blue
+#   away       #f472b6  neon pink
+#   unassigned #64748b  slate
 TEAM_COLOURS_BGR = {
     "team-home": (255, 212, 0),
     "team-away": (182, 114, 244),
@@ -60,15 +132,27 @@ PITCH_OUTLINE_M: tuple[tuple[tuple[float, float], ...], ...] = (
 #: sign of a near-degenerate homography; drawing it would smear the whole image.
 _MAX_REPROJECTED_PX = 100_000.0
 
+# Rendering is a presentation stage, not a measurement one, so it is allowed
+# to be skipped without affecting a single stored number.
 RENDER_OVERLAY_VIDEO = os.getenv("RENDER_OVERLAY_VIDEO", "1") not in ("0", "false", "False")
 
+# Output is capped at this width. Encoding cost and file size both scale with
+# pixel count, and 960 keeps a player box and its track-id plate legible.
+# This is a review artifact, not a master -- the source clip is still on disk
+# and still served by /file, so nothing is lost by not re-encoding it at full
+# resolution. Set OVERLAY_MAX_WIDTH=0 to render at native size.
 OVERLAY_MAX_WIDTH = int(os.getenv("OVERLAY_MAX_WIDTH", "960"))
 
+# (fourcc, container suffix, MIME type), tried in order. See the CODEC note
+# in this module's docstring for why this order and why mp4v is not in it.
 OVERLAY_CODEC_CHAIN: tuple[tuple[str, str, str], ...] = (
     ("avc1", ".mp4", "video/mp4"),
     ("VP80", ".webm", "video/webm"),
 )
 
+# Every suffix this module has ever written, newest first. Used to FIND an
+# existing render rather than to choose one to write: a video processed
+# before the codec change has a .webm on disk and must keep playing.
 OVERLAY_SUFFIXES: tuple[str, ...] = (".mp4", ".webm")
 
 MIME_BY_SUFFIX = {".mp4": "video/mp4", ".webm": "video/webm"}
@@ -96,6 +180,10 @@ class OverlayRenderResult:
     frames_written: int
     skipped_reason: str | None = None
     codec: str | None = None
+    # Filled from a re-open of the written file, not from what was intended:
+    # "I wrote 14502 frames" and "this file contains 14502 decodable frames"
+    # are different claims, and only the second one is what a browser will
+    # experience. See _verify_output().
     verified_frames: int | None = None
     width: int | None = None
     height: int | None = None
@@ -122,13 +210,30 @@ class OverlayRenderResult:
 
 def overlay_output_path(storage_path: str, video_id: str,
                         suffix: str | None = None) -> Path:
-    """Where the annotated render for this video is WRITTEN."""
+    """Where the annotated render for this video is WRITTEN.
+
+    Derived by convention next to the upload rather than stored in a new
+    column: this is a regenerable artifact, and adding a nullable path column
+    would mean a migration plus a second source of truth about a file whose
+    real state is "is it on disk".
+
+    `suffix` defaults to the first codec in the chain. Callers that want to
+    know whether a render exists must use find_overlay_output() instead --
+    the suffix depends on which codec actually opened at render time, and on
+    whether the run predates the H.264 switch.
+    """
     resolved = suffix or _codec_chain()[0][1]
     return Path(storage_path).parent / "processed" / f"{video_id}_tracked{resolved}"
 
 
 def find_overlay_output(storage_path: str, video_id: str) -> Path | None:
-    """The annotated render for this video that is actually ON DISK, or None."""
+    """The annotated render for this video that is actually ON DISK, or None.
+
+    Checks every suffix this module has ever written, newest format first, so
+    a clip rendered as VP8/WebM before the codec change keeps playing without
+    being re-rendered. Existence on disk is the single source of truth about
+    whether a processed video exists -- there is no DB column claiming it.
+    """
     for candidate_suffix in OVERLAY_SUFFIXES:
         candidate = overlay_output_path(storage_path, video_id, candidate_suffix)
         if candidate.exists() and candidate.stat().st_size > 0:
@@ -142,19 +247,38 @@ def media_type_for(path: Path | str) -> str:
 
 
 def team_colour_bgr(team_id: str | None) -> tuple[int, int, int]:
-    """Colour for a team id, neutral for anything unrecognised."""
+    """Colour for a team id, neutral for anything unrecognised.
+
+    Matched exactly, never by substring. The frontend's equivalent helper
+    tested `String(team_id).includes('a')` -- and BOTH "team-home" and
+    "team-away" contain an "a", so every player on both teams was drawn in
+    the same colour and the overlay's team distinction was decorative. An
+    unknown id here reads as unassigned, which is true, instead of being
+    silently bucketed into whichever branch its spelling happened to hit.
+    """
     if team_id is None:
         return UNASSIGNED_BGR
     return TEAM_COLOURS_BGR.get(str(team_id).strip().lower(), UNASSIGNED_BGR)
 
 
 def _even(value: int) -> int:
-    """Nearest even size >= 2."""
+    """Nearest even size >= 2.
+
+    Both encoders in the chain subsample chroma in 2x2 blocks and reject (or
+    silently pad) an odd dimension, so callers apply this to BOTH dimensions,
+    for native-size frames (OVERLAY_MAX_WIDTH=0) as well as downscaled ones.
+    """
     return max(2, int(value) // 2 * 2)
 
 
 def _open_writer(cv2, out_path: Path, fps: float, size: tuple[int, int]):
-    """First codec in the chain that actually opens. Returns (writer, path, codec)."""
+    """First codec in the chain that actually opens. Returns (writer, path, codec).
+
+    Tries each rung and, critically, checks isOpened() rather than trusting
+    the constructor: cv2.VideoWriter never raises, it returns a closed writer
+    whose write() calls are silent no-ops. That is the exact failure shape
+    that produces a 0-byte file and a job that still says "completed".
+    """
     attempts: list[str] = []
     for fourcc, suffix, _mime in _codec_chain():
         candidate = out_path.with_suffix(suffix)
@@ -167,6 +291,9 @@ def _open_writer(cv2, out_path: Path, fps: float, size: tuple[int, int]):
                                attempts[0], ", ".join(attempts), fourcc)
             return writer, candidate, fourcc
         writer.release()
+        # A rung that failed leaves a 0-byte stub behind. Remove it, or
+        # find_overlay_output() would later report a "render" that is an
+        # empty file.
         try:
             if candidate.exists() and candidate.stat().st_size == 0:
                 candidate.unlink()
@@ -177,7 +304,12 @@ def _open_writer(cv2, out_path: Path, fps: float, size: tuple[int, int]):
 
 
 def _verify_output(cv2, path: Path, expected_frames: int) -> tuple[int, int, int, float]:
-    """Re-open the written file and report what is REALLY in it."""
+    """Re-open the written file and report what is REALLY in it.
+
+    An encoder that opened, accepted every write and produced a file is still
+    not proof of a playable video -- this reads the container back and counts
+    decodable frames. Returns (frames, width, height, fps).
+    """
     check = cv2.VideoCapture(str(path))
     try:
         if not check.isOpened():
@@ -185,6 +317,10 @@ def _verify_output(cv2, path: Path, expected_frames: int) -> tuple[int, int, int
         width = int(check.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(check.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = float(check.get(cv2.CAP_PROP_FPS) or 0.0)
+        # CAP_PROP_FRAME_COUNT is a container metadata read, not a decode --
+        # trusted only when it agrees with what was written. When it does
+        # not, decode far enough to tell whether the file is genuinely short
+        # or the header is merely unreliable (common for streamed mp4).
         reported = int(check.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         if reported >= expected_frames > 0:
             return reported, width, height, fps
@@ -216,18 +352,21 @@ def render_overlay_video(
     Draw `frames` (list[list[TrackedDetection]], indexed by frame number)
     onto the source video and write an annotated clip beside it.
 
-    Every model gets a mark of its own, so the render is a frame-by-frame
-    check on all five of them rather than on the player detector alone:
+    Args:
+        ball_by_frame: {frame_number: BallObservation}. Only DETECTED
+            observations should be passed -- an interpolated position drawn
+            in the same marker as a measured one would be indistinguishable
+            from evidence the ball was seen there.
+        calibration_by_frame: {frame_number: bool} -- whether that frame's
+            calibration was valid. Drives the HUD's calibration chip. Absent
+            means the HUD reports "n/a" rather than implying either answer.
 
-    - `ball_by_frame[fid]`        -> BallObservation (`.pixel_x/.pixel_y`)
-    - `field_by_frame[fid]`       -> FieldRegion (`.polygon`, `.confidence`)
-    - `goalposts_by_frame[fid]`   -> list[GoalpostDetection]
-    - `homography_by_frame[fid]`  -> the 3x3 pixel->pitch H for that frame
-    - `calibration_by_frame[fid]` -> a bool, or anything with `.valid`
-      (and optionally `.confidence`); both shapes drive the HUD.
-
-    All coordinates are ORIGINAL pixel space -- the renderer applies the
-    downscale to OVERLAY_MAX_WIDTH itself.
+    Never raises into the pipeline. A failed render costs a video file, not a
+    run: every metric this job produced is already computed and persisted by
+    the time this is called, so an encoder problem must not turn a successful
+    analysis into a failed job. It is REPORTED rather than swallowed -- the
+    returned result carries the reason, run_pipeline() persists it, and the
+    API serves it, so "no processed video" is never a silent outcome.
     """
     if not RENDER_OVERLAY_VIDEO:
         return OverlayRenderResult(None, 0, "RENDER_OVERLAY_VIDEO=0")
@@ -283,6 +422,10 @@ def render_overlay_video(
                         f"{out_size[0]}x{out_size[1]} @ {out_fps:.2f}fps",
                     )
 
+            # Resize FIRST, then draw at the output scale. Drawing at source
+            # size and shrinking afterwards would thin every box line and
+            # every glyph by the same factor, which is what makes a
+            # downscaled annotated video unreadable.
             if out_size != (image.shape[1], image.shape[0]):
                 image = cv2.resize(image, out_size, interpolation=cv2.INTER_AREA)
 
@@ -303,7 +446,8 @@ def render_overlay_video(
             if progress and (written % report_every == 0 or written == total):
                 progress(written, total)
 
-    except Exception as error:
+        # See this function's docstring: a render failure is not a run failure.
+    except Exception as error:  # noqa: BLE001 - overlay is optional output; report failure, keep the job
         logger.warning("overlay render failed after %d frames: %s", written, error)
         return OverlayRenderResult(None, written, str(error), codec=codec)
     finally:
@@ -314,6 +458,8 @@ def render_overlay_video(
     if written == 0 or written_path is None:
         return OverlayRenderResult(None, 0, "no frames decoded", codec=codec)
 
+    # The artifact check. Everything above proves the encoder accepted the
+    # frames; only this proves a decoder can get them back out.
     size_bytes = written_path.stat().st_size if written_path.exists() else 0
     if size_bytes == 0:
         return OverlayRenderResult(
@@ -332,6 +478,9 @@ def render_overlay_video(
         )
 
     if verified < written * 0.9:
+        # Short by more than a rounding error. Reported, not hidden: a clip
+        # that stops a third of the way through still plays, so nothing here
+        # would otherwise notice.
         logger.warning(
             "annotated render is short: wrote %d frames, file decodes %d",
             written, verified,
@@ -446,6 +595,7 @@ def _draw_frame(cv2, image, detections, ball, scale: float = 1.0, *,
 
     for det in detections or []:
         colour = team_colour_bgr(getattr(det, "team_id", None))
+        # Detections are in SOURCE pixel space; the canvas may be smaller.
         x1 = max(0, int(det.x * scale))
         y1 = max(0, int(det.y * scale))
         x2 = min(width, int((det.x + det.width) * scale))
@@ -455,6 +605,10 @@ def _draw_frame(cv2, image, detections, ball, scale: float = 1.0, *,
 
         cv2.rectangle(image, (x1, y1), (x2, y2), colour, 2)
 
+        # The track id is the only thing a viewer can use to follow one
+        # player across frames, so it is drawn on a filled plate rather than
+        # bare text -- unreadable white-on-white over a bright pitch is the
+        # same as not labelling at all.
         label = f"#{det.player_id}"
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
         ty = max(th + 4, y1)
@@ -463,6 +617,9 @@ def _draw_frame(cv2, image, detections, ball, scale: float = 1.0, *,
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (16, 16, 24), 1, cv2.LINE_AA)
 
     if ball is not None:
+        # frame_data.BallObservation's fields are `pixel_x` / `pixel_y`; there
+        # is no `.x`. A getattr default on the wrong name fails silently and
+        # the ball marker is never drawn.
         bx = getattr(ball, "pixel_x", None)
         by = getattr(ball, "pixel_y", None)
         if bx is not None and by is not None:
@@ -521,6 +678,8 @@ def _draw_hud(cv2, image, frame_number: int, timestamp: float,
     (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
     pad = 6
     box_h = th + pad * 2
+    # Bottom-left: the top of a broadcast frame carries the scoreboard and
+    # the middle carries the play.
     y0 = max(0, height - box_h)
     cv2.rectangle(image, (0, y0), (min(width, tw + pad * 2), height),
                   HUD_PANEL_BGR, -1)

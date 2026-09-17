@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -73,10 +73,13 @@ async def client_and_app(_memory_db_env: str) -> AsyncIterator[tuple[AsyncClient
         from nexus.core.provider_manager import ProviderManager
 
         provider_manager = ProviderManager({"local": local_provider})
-        app.state.provider_manager = provider_manager
-        app.state.router = ModelRouter(provider_manager, list_models())
-        app.state.verification_engine = VerificationEngine(
-            app.state.router, _FakeFactChecker(), _FakeJudge(),
+        app.state.services.provider_manager = provider_manager
+        app.state.services.router = ModelRouter(provider_manager, list_models())
+        # Deterministic-checks-only verification engine — avoids any real
+        # LLM call for fact-checking/judging, matching principle 6 (no
+        # network access in tests) while still exercising chat.py's wiring.
+        app.state.services.verification_engine = VerificationEngine(
+            app.state.services.router, _FakeFactChecker(), _FakeJudge(),
             escalate_below=0.65, enable_fact_check=False, enable_judge=False,
         )
 
@@ -86,7 +89,7 @@ async def client_and_app(_memory_db_env: str) -> AsyncIterator[tuple[AsyncClient
 
 
 async def _cost_record_count(app, session_id: str) -> int:
-    engine = app.state.cost_tracker._engine
+    engine = app.state.services.cost_tracker._engine
     session_factory = make_session_factory(engine)
     async with session_factory() as db:
         result = await db.execute(select(CostRecord).where(CostRecord.session_id == session_id))
@@ -148,6 +151,10 @@ async def test_verification_cost_lands_as_a_separate_cost_ledger_entry(
     assert response.status_code == 200
     session_id = response.json()["session_id"]
 
+    # One entry for the main generation. Verification here used only
+    # deterministic checks (no LLM tokens spent, extra_usage stays at
+    # 0/0), so it correctly does NOT add a second entry — the assertion
+    # that matters is that the main entry alone reflects the real spend.
     count = await _cost_record_count(app, session_id)
     assert count == 1
 
@@ -157,7 +164,7 @@ async def test_always_verify_task_types_forces_verification_without_the_flag(
     client_and_app: tuple[AsyncClient, object],
 ) -> None:
     client, app = client_and_app
-    app.state.settings.verification.always_verify_task_types = ["general"]
+    app.state.services.settings.verification.always_verify_task_types = ["general"]
 
     response = await client.post(
         "/api/chat",
@@ -172,7 +179,7 @@ async def test_always_verify_task_types_forces_verification_without_the_flag(
     assert body["task_type"] == "general"
     assert body["verification"] is not None
 
-    app.state.settings.verification.always_verify_task_types = ["health", "research", "mathematics"]
+    app.state.services.settings.verification.always_verify_task_types = ["health", "research", "mathematics"]
 
 
 @pytest.mark.asyncio
@@ -180,7 +187,7 @@ async def test_verification_disabled_globally_short_circuits_even_with_verify_tr
     client_and_app: tuple[AsyncClient, object],
 ) -> None:
     client, app = client_and_app
-    app.state.settings.verification.enabled = False
+    app.state.services.settings.verification.enabled = False
 
     response = await client.post(
         "/api/chat",
@@ -194,7 +201,7 @@ async def test_verification_disabled_globally_short_circuits_even_with_verify_tr
     assert response.status_code == 200
     assert response.json()["verification"] is None
 
-    app.state.settings.verification.enabled = True
+    app.state.services.settings.verification.enabled = True
 
 
 @pytest.mark.asyncio
@@ -221,4 +228,5 @@ async def test_streaming_with_verify_emits_report_in_final_done_event(
     assert len(done_lines) == 1
     assert '"verification"' in done_lines[0]
     assert '"band": "high"' in done_lines[0]
+    # The streamed delta must carry the RAW content, no footer text baked in.
     assert all("High confidence" not in line for line in content_lines)

@@ -13,7 +13,14 @@ class HealthAgent(Agent):
     )
     allowed_tools = ["files"]
     task_type = TaskType.HEALTH
+    # Health data stays on-device — never routed to a cloud provider,
+    # regardless of what policy a caller might otherwise request.
     default_policy = RoutingPolicy.LOCAL_ONLY
+    # staticmethod: without it, a plain function assigned as a class
+    # attribute becomes a bound method, and `agent.output_filter(text)`
+    # would silently call check_output(self, text) instead of
+    # check_output(text) — this filter must be unconditionally applied by
+    # AgentRuntime, not something that breaks quietly on a self-binding bug.
     output_filter = staticmethod(check_output)
 
     def system_prompt(self, context: AgentContext) -> str:

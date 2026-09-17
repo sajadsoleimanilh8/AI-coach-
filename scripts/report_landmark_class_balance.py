@@ -1,5 +1,37 @@
 """
 Per-class instance counts for the field-landmark dataset.
+
+WHY THIS EXISTS
+    A YOLO detector trained on a long-tailed class distribution will
+    under-detect the tail, and it will do so quietly -- overall mAP stays
+    respectable while specific landmarks are simply never found. For a
+    CALIBRATION landmark detector that failure is worse than for a normal
+    detector, because a homography needs landmarks spread across the frame:
+    losing a few rare classes can be the difference between a
+    well-conditioned fit and a degenerate one.
+
+    This script is a decision aid, not a fix. It reports which classes are
+    thin so a human can decide whether to re-label, re-weight, or drop
+    them. It deliberately does not modify the dataset.
+
+WHAT LOW_SAMPLE MEANS
+    Fewer than LOW_SAMPLE_THRESHOLD (50) total instances across train+val.
+    That number is a starting heuristic, not a validated cutoff -- it is
+    roughly where a single-class detector stops having enough examples to
+    learn viewpoint variation. Treat a LOW_SAMPLE flag as "look at this",
+    not "this is broken".
+
+    Two additional flags matter as much as the raw count:
+      VAL_ZERO   -- class never appears in val, so its accuracy is
+                    unmeasurable no matter how well it trains.
+      TRAIN_ZERO -- class never appears in train, so it cannot be learned
+                    at all; any val instances are guaranteed misses.
+    Both are consequences of holding out a whole clip and are worth knowing
+    before training, not after.
+
+Run:
+    python -m scripts.report_landmark_class_balance
+    python -m scripts.report_landmark_class_balance --dataset <path>
 """
 
 from __future__ import annotations
@@ -14,12 +46,19 @@ DEFAULT_DATASET = REPO_ROOT / "datasets" / "field_landmarks" / "field_yolo_v2"
 
 SPLITS = ("train", "val")
 
+#: Below this many total instances, a class is flagged for human review.
+#: Heuristic starting point -- see module docstring.
 LOW_SAMPLE_THRESHOLD = 50
 
 
 def read_data_yaml(dataset_root: Path) -> tuple[int | None, dict[int, str]]:
     """
     Pull `nc` and `names` out of data.yaml without requiring PyYAML.
+
+    Only the two flat shapes this repo writes are parsed (`nc: N` and an
+    indented `idx: name` block under `names:`). Anything else returns
+    (None, {}) and the report falls back to observed class ids -- a parse
+    guess would be worse than no names.
     """
     path = dataset_root / "data.yaml"
     if not path.is_file():
@@ -61,9 +100,12 @@ def read_data_yaml(dataset_root: Path) -> tuple[int | None, dict[int, str]]:
 def count_instances(dataset_root: Path) -> tuple[dict[str, Counter], dict[str, int], list[str]]:
     """
     Returns (per-split class counters, per-split frame counts, warnings).
+
+    Warnings collect malformed or empty label files -- surfaced rather than
+    skipped, because an empty label file trains as a background image.
     """
     per_split: dict[str, Counter] = {split: Counter() for split in SPLITS}
-    frames: dict[str, int] = {split: 0 for split in SPLITS}
+    frames: dict[str, int] = dict.fromkeys(SPLITS, 0)
     warnings: list[str] = []
 
     for split in SPLITS:
@@ -95,6 +137,11 @@ def count_instances(dataset_root: Path) -> tuple[dict[str, Counter], dict[str, i
 def landmarks_per_frame_histogram(dataset_root: Path) -> dict[str, Counter]:
     """
     How many landmarks are visible per frame, per split.
+
+    A homography needs >= 4 correspondences and, in practice, more than
+    that well spread out. Frames carrying 2-3 landmarks cannot calibrate
+    anything on their own, so knowing how many such frames exist is part of
+    reading this dataset honestly.
     """
     hist: dict[str, Counter] = {split: Counter() for split in SPLITS}
     for split in SPLITS:

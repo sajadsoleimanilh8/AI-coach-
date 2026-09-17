@@ -9,20 +9,26 @@ from nexus.intelligence.task_classifier import _default_signal_map
 
 PrivacyLevel = Literal["public", "sensitive", "private"]
 
+# confidence = min(1.0, base + 0.1 * matched_count): private/sensitive use
+# different bases (0.6 / 0.4) since a single hard-PII match (private) is
+# inherently more certain than a single soft personal-state phrase
+# (sensitive).
 _PRIVATE_CONFIDENCE_BASE = 0.6
 _SENSITIVE_CONFIDENCE_BASE = 0.4
 _CONFIDENCE_PER_SIGNAL = 0.1
 _PUBLIC_CONFIDENCE = 0.5
 
+# Hard PII / secrets — always "private", and private always wins over
+# sensitive even if both tiers match (see classify()).
 _DEFAULT_PRIVATE_PATTERNS: list[str] = [
-    r"[\w.+-]+@[\w-]+\.[\w.-]+",
-    r"\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b",
-    r"\b\d{3}-\d{2}-\d{4}\b",
-    r"\b\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{4}\b",
-    r"\bsk-[A-Za-z0-9]{16,}\b",
-    r"\bAKIA[0-9A-Z]{16}\b",
-    r"\bghp_[A-Za-z0-9]{30,}\b",
-    r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b",
+    r"[\w.+-]+@[\w-]+\.[\w.-]+",  # email
+    r"\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b",  # phone
+    r"\b\d{3}-\d{2}-\d{4}\b",  # SSN-like
+    r"\b\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{4}\b",  # credit-card-like
+    r"\bsk-[A-Za-z0-9]{16,}\b",  # OpenAI-style API key
+    r"\bAKIA[0-9A-Z]{16}\b",  # AWS access key
+    r"\bghp_[A-Za-z0-9]{30,}\b",  # GitHub token
+    r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b",  # Slack token
     r"i (?:was|have been) diagnosed with",
     r"\bmy medication\b",
     r"\bmy prescription\b",
@@ -33,6 +39,9 @@ _DEFAULT_PRIVATE_PATTERNS: list[str] = [
     r"\biban\b",
 ]
 
+# Softer personal-state phrasing without hard PII, plus (per spec) the
+# task classifier's HEALTH/PRIVATE_PERSONAL signals — those topics are
+# personal even when no regulated-data pattern is present.
 _DEFAULT_SENSITIVE_PATTERNS: list[str] = [
     r"i(?:'ve| have) been feeling tired",
     r"my sleep has been",
@@ -62,7 +71,12 @@ class PrivacyClassification:
 
 
 class PrivacyClassifier:
-    """Deterministic pattern-based privacy classifier."""
+    """Deterministic pattern-based privacy classifier.
+
+    Any single "private" tier match wins over "sensitive" signals — hard
+    PII/secrets always take precedence, since the whole point is to force
+    LOCAL_ONLY routing and a false negative here has real consequences.
+    """
 
     def __init__(self, signal_config: PrivacyClassifierConfig | None = None) -> None:
         config = signal_config or PrivacyClassifierConfig()
@@ -74,6 +88,8 @@ class PrivacyClassifier:
             + list(config.extra_sensitive_patterns)
         )
 
+        # Compiled once here (construction happens once per app lifetime,
+        # in main.py's lifespan), never recompiled inside classify().
         self._private_patterns = [(raw, re.compile(raw, re.IGNORECASE)) for raw in private_sources]
         self._sensitive_patterns = [
             (raw, re.compile(raw, re.IGNORECASE)) for raw in sensitive_sources

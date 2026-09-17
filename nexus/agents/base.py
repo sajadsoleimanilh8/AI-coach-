@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from nexus.core.types import Message, RoutingPolicy, TaskType, Usage
 from nexus.health.safety import SafetyVerdict
@@ -31,9 +32,15 @@ class AgentResult:
     iterations_used: int
     usage: Usage
     cost_usd: float | None = None
+    # Additive beyond the core result shape — AgentRunResponse (the API
+    # boundary) needs to report which model/provider actually ran the goal,
+    # the same way ChatResponse already surfaces this for /api/chat.
     model_used: str | None = None
     provider_name: str | None = None
     verification: VerificationReport | None = None
+    # Populated only by agents that delegate (OrchestratorAgent) — empty
+    # for every other agent, so the delegation tree is inspectable without
+    # changing what a non-delegating run returns.
     delegation_steps: list[Any] = field(default_factory=list)
     rounds_used: int = 1
 
@@ -53,6 +60,10 @@ class Agent(ABC):
     """A goal-driven role that runs through AgentRuntime: a system prompt,
     an explicit tool allowlist (enforced by run_tool_loop, not just
     documented here — principle 2), and a routing task_type/policy.
+
+    Agents never call providers, the router, or run_tool_loop directly —
+    that orchestration lives in AgentRuntime so every agent shares the
+    exact same execution semantics chat.py's tool path already has.
     """
 
     name: str
@@ -60,8 +71,18 @@ class Agent(ABC):
     allowed_tools: list[str]
     task_type: TaskType
     default_policy: RoutingPolicy | None = None
+    # Optional, unbypassable post-filter AgentRuntime applies to
+    # final_answer when set — keeps the runtime itself generic (it doesn't
+    # know or care what "health" is) while making HealthAgent's safety
+    # filter mandatory rather than something a caller could forget to
+    # invoke.
     output_filter: Callable[[str], SafetyVerdict] | None = None
+    # Default False so every pre-existing agent's behavior is unchanged —
+    # only ResearchAgent opts in (see nexus/agents/research.py), since its
+    # output is the most citation-dependent and load-bearing.
     verify_output: bool = False
+    # 1 means "one tool loop and done" — exactly what every Group B agent
+    # does today. Only AutonomousResearchAgent raises it.
     max_rounds: int = 1
 
     @abstractmethod

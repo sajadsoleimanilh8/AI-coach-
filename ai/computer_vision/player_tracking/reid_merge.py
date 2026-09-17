@@ -49,8 +49,8 @@ ascending cost, so the same video always produces the same ids.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable
 
 import cv2
 import numpy as np

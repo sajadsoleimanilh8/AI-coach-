@@ -1,5 +1,37 @@
 """
 Per-frame calibration diagnostics over a REAL VIDEO, not a labelled split.
+
+WHY THIS EXISTS ALONGSIDE validate_auto_calibration.py
+    validate_auto_calibration.py answers "how many metres wrong is the
+    homography" and needs GROUND-TRUTH keypoints, so it can only run on the
+    labelled dataset split -- which is exactly the in-domain footage the
+    model already handles. It cannot say anything about a broadcast clip.
+
+    This script answers the different question the pipeline actually cares
+    about: *over a real video, how many frames end up with
+    calibration.valid, and for the ones that do not, WHY NOT.* There is no
+    ground truth here, so it deliberately reports no positional accuracy --
+    only detection yield, fit geometry, and the exact gate that rejected
+    each frame.
+
+WHAT IT MEASURES (per frame)
+    - box confidence of the pitch instance, and all 32 keypoint confidences
+    - usable keypoints at EVERY threshold in the sweep, from one inference
+    - homography fit: reprojection error, RANSAC inlier count/ratio
+    - which gate rejected the frame (the exact invalid_reason)
+    - preprocessing path comparison (--compare-preprocess)
+
+ONE INFERENCE PER FRAME PER PATH
+    The model is run at a near-zero box-confidence floor and the configured
+    floor is applied afterwards in software. With max_det=1 that is exactly
+    equivalent to running at the configured floor -- the same single best
+    box either survives the gate or does not -- and it makes the whole
+    threshold sweep free instead of one full pass per threshold.
+
+Usage:
+    python -m scripts.evaluate_calibration_video test.mp4 --frames 3300
+    python -m scripts.evaluate_calibration_video test.mp4 --frames 3300 \
+        --compare-preprocess --json runs/calib_eval.json
 """
 
 from __future__ import annotations
@@ -7,7 +39,6 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
-import sys
 import time
 from collections import Counter
 from pathlib import Path
@@ -16,8 +47,6 @@ import cv2
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from ai.computer_vision.frame_data import FieldRegion  # noqa: E402
 from ai.computer_vision.tactical_analysis.auto_calibration import (  # noqa: E402
@@ -29,8 +58,14 @@ from ai.computer_vision.tactical_analysis.constants import (  # noqa: E402
 )
 from configs import registry  # noqa: E402
 
+#: Thresholds swept for the keypoint visibility floor. Every one of these is
+#: evaluated from the SAME inference, so the sweep costs nothing extra.
 DEFAULT_SWEEP = (0.20, 0.25, 0.30, 0.35, 0.40, 0.50)
 
+#: Box-confidence floor used for the raw inference. Deliberately near zero:
+#: the configured floor is re-applied in software so that "the model found
+#: nothing at all" and "the model found something the gate rejected" are
+#: distinguishable, which a run at the configured floor cannot show.
 RAW_BOX_CONF = 0.001
 
 FIELD_DETECT_STRIDE = 25
@@ -142,6 +177,7 @@ def _summarise(rows, key, label, sweep, configured_thr, box_conf_floor):
               f"{(statistics.median(rep) if rep else float('nan')):9.3f} "
               f"{(100 * statistics.mean(ratios) if ratios else float('nan')):7.1f}%{mark}")
 
+    # Rejection reasons at the configured threshold, over EVERY frame.
     reasons = Counter()
     for r in rows:
         d = r[key]
@@ -190,6 +226,19 @@ def run_pipeline_mode(video: str, n_want: int, stride: int,
     """
     Runs the REAL AutoCalibrator.calibrate() over the video, exactly as
     backend/pipeline/runner.py does, and reports the end-to-end outcome.
+
+    WHY THIS IS SEPARATE FROM THE PER-FRAME MODE
+        The per-frame mode above deliberately has no memory: it measures
+        what the DETECTOR and the GEOMETRY can do on each frame standing
+        alone. This mode adds the temporal machinery -- carry-forward,
+        confidence decay, expiry, jump rejection, smoothing.
+
+        Both numbers are needed, and reporting only the second would be
+        misleading. "Valid frames went up" means something very different
+        when the increase came from one good solve being reused for twenty
+        frames than when it came from twenty frames solving independently.
+        The source breakdown below is printed precisely so that question
+        cannot be dodged.
     """
     from ai.computer_vision.frame_data import CalibrationSource
     from ai.computer_vision.tactical_analysis.auto_calibration import AutoCalibrator

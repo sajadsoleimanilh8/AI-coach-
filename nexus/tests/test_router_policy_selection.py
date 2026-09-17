@@ -107,6 +107,9 @@ def test_balanced_weighs_capability_cost_and_locality() -> None:
 
 
 def test_explicit_model_id_always_wins() -> None:
+    # provider_for_model() resolves the requested id via the real
+    # nexus/config/models.yaml registry (not the fake ranking registry
+    # above), so this uses a real registry entry: gpt-4o -> provider openai.
     decision = _router().route(requested_model_id="gpt-4o")
     assert decision.model_id == "gpt-4o"
     assert decision.provider_name == "openai"
@@ -138,6 +141,8 @@ def test_require_tool_calling_filters_out_non_capable_models() -> None:
     )
     router = ModelRouter(provider_manager, _registry_with_mixed_tool_support())
 
+    # MAX_QUALITY would normally pick strong-no-tools (0.9 > 0.5), but it
+    # doesn't support tool calling, so require_tool_calling must exclude it.
     decision = router.route(
         task_type=TaskType.COMPLEX_REASONING,
         policy=RoutingPolicy.MAX_QUALITY,

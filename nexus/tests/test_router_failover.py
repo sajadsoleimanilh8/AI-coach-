@@ -73,6 +73,8 @@ async def test_failover_skips_unhealthy_top_candidate() -> None:
         task_type=TaskType.COMPLEX_REASONING, policy=RoutingPolicy.MAX_QUALITY
     )
 
+    # MAX_QUALITY would normally pick quality-cloud (anthropic), but it's
+    # unhealthy, so failover should move to the next-ranked candidate.
     assert decision.model_id == "cheap-cloud"
     assert provider.name == "openai"
 
@@ -125,6 +127,8 @@ async def test_failover_falls_through_when_explicit_model_provider_is_unhealthy(
     )
     router = ModelRouter(provider_manager, _registry())
 
+    # Explicit request for a real registry model whose provider is unhealthy
+    # (anthropic) must not crash the request — it should fail over.
     decision, provider = await router.route_with_failover(requested_model_id="claude-sonnet-4-5")
 
     assert provider.name != "anthropic"
@@ -132,6 +136,10 @@ async def test_failover_falls_through_when_explicit_model_provider_is_unhealthy(
 
 @pytest.mark.asyncio
 async def test_require_tool_calling_final_fallback_raises_when_local_lacks_tool_support() -> None:
+    # local-model in _registry() has no supports_tool_calling flag (defaults
+    # False); cloud candidates are unhealthy, so there is no tool-capable
+    # option anywhere — the guaranteed local fallback must not silently
+    # succeed with a model that can't actually do what was asked.
     provider_manager = ProviderManager(
         {
             "local": _FakeProvider("local", healthy=True),

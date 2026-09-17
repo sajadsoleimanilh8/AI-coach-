@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -16,6 +16,7 @@ from nexus.api.schemas import (
     UsageSchema,
     VerificationReportSchema,
 )
+from nexus.api.services import get_services
 from nexus.config.settings import PersonalSettings, VerificationSettings
 from nexus.core.cost_tracker import CostTracker
 from nexus.core.exceptions import (
@@ -98,6 +99,9 @@ def _resolve_effective_policy(
     force_local_on_private: bool,
     session_id: str,
 ) -> RoutingPolicy | None:
+    # Explicit user choice (policy or a pinned model_id) always wins — the
+    # privacy override only ever kicks in when the router would otherwise
+    # have made the choice on the user's behalf.
     user_made_explicit_choice = payload.policy is not None or payload.model_id is not None
     if (
         not user_made_explicit_choice
@@ -156,6 +160,9 @@ async def _apply_rag(
         )
         for chunk in retrieved
     ]
+    # Full (untruncated) chunks — citations above truncate chunk_text for
+    # display, but verification's citation-support/fact-check steps need
+    # the real text to compute lexical overlap against, not a display copy.
     return [synthetic_message] + full_context, citations, retrieved
 
 
@@ -168,12 +175,24 @@ async def _apply_personal_context(
     profile_store: ProfileStore,
     personal_settings: PersonalSettings,
 ) -> tuple[list[Message], bool | None]:
-    """Returns (possibly-updated full_context, personal_context_used)."""
+    """Returns (possibly-updated full_context, personal_context_used).
+
+    personal_context_used is None when the caller never asked for personal
+    context at all (mirrors citations/tool_calls_made staying None unless
+    their own use_* flag was set) — False specifically means it was asked
+    for but withheld or unavailable, True means it was actually injected.
+    """
     if not payload.use_personal_context:
         return full_context, None
     if not personal_settings.enabled:
         return full_context, False
 
+    # Privacy gate (principle 7). This MUST run after route_with_failover()
+    # resolves `decision` — the effective policy or an explicit model_id can
+    # still land on a cloud provider despite a LOCAL_ONLY-leaning request,
+    # and failover can move a request off local for availability reasons;
+    # either way, what actually matters is where the request is really
+    # about to go, which is only known once routing has finished.
     if personal_settings.local_only_context and decision.provider_name != "local":
         logger.warning(
             "personal context withheld: route resolved to non-local provider=%s while "
@@ -236,7 +255,16 @@ async def _run_verification(
     CostTracker ledger entry tagged with the answering model (principle
     4) — never folded invisibly into the main generation's cost entry, so
     "how much did verifying this session cost" stays a real, queryable
-    """
+    number rather than disappearing into the main total. Tagging with the
+    answering model rather than whichever model(s) fact-checking/judging
+    actually used internally is a deliberate simplification: it's the
+    natural join key for "cost of verifying this model's answers", even
+    though the verification LLM calls themselves may route elsewhere.
+
+    Returns (footer-applied answer text, response schema) — callers that
+    stream deltas before verification can run should use the schema only
+    and keep the raw, already-sent text unmodified (see chat()'s
+    stream+verify note)."""
     report = await verification_engine.verify(
         question=question, answer=answer, model_id=decision.model_id, task_type=task_type,
         evidence=evidence,
@@ -266,6 +294,9 @@ async def _log_interaction(
     """Writes one training-mining record per answered request. Returns None
     whenever logging is off, which is the default — the caller then reports
     interaction_id=None and there is nothing for /api/feedback to rate.
+
+    A logging failure must never fail the request the user actually made:
+    they got their answer, and losing a training record is not worth a 500.
     """
     if interaction_logger is None or not interaction_logger.enabled:
         return None
@@ -290,20 +321,24 @@ async def _log_interaction(
 
 @router.post("/chat", response_model=None)
 async def chat(payload: ChatRequest, request: Request) -> ChatResponse | StreamingResponse:
-    memory: MemoryStore = request.app.state.memory
-    model_router: ModelRouter = request.app.state.router
-    cost_tracker: CostTracker = request.app.state.cost_tracker
-    latency_tracker: LatencyTracker = request.app.state.latency_tracker
-    task_classifier: TaskClassifier = request.app.state.task_classifier
-    privacy_classifier: PrivacyClassifier = request.app.state.privacy_classifier
-    rag_service: RagService = request.app.state.rag_service
-    tool_registry: ToolRegistry = request.app.state.tool_registry
-    settings = request.app.state.settings
+    memory: MemoryStore = get_services(request).memory
+    model_router: ModelRouter = get_services(request).router
+    cost_tracker: CostTracker = get_services(request).cost_tracker
+    latency_tracker: LatencyTracker = get_services(request).latency_tracker
+    task_classifier: TaskClassifier = get_services(request).task_classifier
+    privacy_classifier: PrivacyClassifier = get_services(request).privacy_classifier
+    rag_service: RagService = get_services(request).rag_service
+    tool_registry: ToolRegistry = get_services(request).tool_registry
+    settings = get_services(request).settings
 
     session_id, history = await _resolve_session(memory, payload.session_id)
     new_messages = _incoming_messages(payload)
     full_context = history + new_messages
 
+    # Classify only this turn's new text, not the whole conversation —
+    # re-scanning full history on every turn is wasteful and drifts from
+    # what THIS turn is actually asking; the long-context override still
+    # sees the full prompt size via extra_char_count below.
     query_text = "\n".join(m.content for m in new_messages)
     history_char_count = sum(len(m.content) for m in history)
 
@@ -344,9 +379,9 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse | Streami
         payload,
         decision,
         full_context,
-        request.app.state.personal_state_engine,
-        request.app.state.weakness_engine,
-        request.app.state.profile_store,
+        get_services(request).personal_state_engine,
+        get_services(request).weakness_engine,
+        get_services(request).profile_store,
         settings.personal,
     )
 
@@ -354,12 +389,10 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse | Streami
         await memory.add_message(session_id, message)
 
     classification_reason = _classification_reason(task_classification, privacy_classification)
-    verification_engine: VerificationEngine = request.app.state.verification_engine
+    verification_engine: VerificationEngine = get_services(request).verification_engine
     should_verify = _should_verify(payload, task_type, settings.verification)
 
-    interaction_logger: InteractionLogger | None = getattr(
-        request.app.state, "interaction_logger", None
-    )
+    interaction_logger: InteractionLogger | None = get_services(request).interaction_logger
 
     if payload.use_tools:
         return await _handle_tools_request(
@@ -524,6 +557,8 @@ async def _handle_tools_request(
 
     result = outcome.result
     hit_iteration_cap = outcome.hit_iteration_cap
+    # Pydantic conversion happens here, at the API boundary — core/tool_loop.py
+    # returns the plain ToolCallSummaryData dataclass so core/ never imports api/.
     tool_calls_made = [
         ToolCallSummary(name=t.name, arguments=t.arguments, result_summary=t.result_summary)
         for t in outcome.tool_calls_made
@@ -545,6 +580,10 @@ async def _handle_tools_request(
             f"{classification_reason} | {cap_note}" if classification_reason else cap_note
         )
 
+    # `result.content` (raw) is what memory stored above and what a
+    # streaming delta below sends unmodified; `response_content` (footer-
+    # applied when verified) is only for the JSON/non-streaming response
+    # object — same raw-vs-display split chat()'s direct path uses.
     response_content = result.content
     verification_schema = None
     if should_verify:
@@ -591,6 +630,15 @@ async def _handle_tools_request(
     if not payload.stream:
         return response
 
+    # Scope boundary (Phase 5): the tool-calling loop only ever drives
+    # non-streaming generate() calls (tool-call deltas have nowhere to go
+    # in GenerationChunk, and intermediate reasoning shouldn't stream
+    # anyway) — so stream+use_tools sends the already-complete final
+    # answer as a single SSE content chunk, not token-by-token. The delta
+    # carries the RAW answer (verification's footer is presentation-layer
+    # for the non-streaming response only); the structured verification
+    # report rides in the "done" event instead, same as citations/
+    # tool_calls_made already do (see chat()'s stream+verify note).
     async def _single_chunk_stream() -> AsyncIterator[str]:
         if result.content:
             yield f"data: {json.dumps({'delta': result.content, 'done': False})}\n\n"
@@ -662,6 +710,14 @@ async def _stream_response(
                     latency_seconds=latency_seconds,
                 )
 
+                # Verification needs the COMPLETE answer, which only
+                # exists once streaming finishes — so deltas above stream
+                # normally (unmodified, token-by-token) and the report
+                # lands here, in the final "done" event, never as
+                # additional delta text (mirrors how Group A's
+                # stream+tools sends its single content chunk before this
+                # same done event; verification is the same "can't stream
+                # something that isn't computed yet" constraint).
                 verification_schema = None
                 if should_verify:
                     full_answer = "".join(accumulated)

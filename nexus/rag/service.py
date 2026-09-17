@@ -57,6 +57,10 @@ class RagService:
         self._vector_store = vector_store
         self._chunk_size = chunk_size
         self._chunk_overlap = chunk_overlap
+        # Graph RAG plugs into the existing pipeline rather than replacing
+        # it: with graph_enabled False (the default) ingest and retrieve
+        # take exactly the paths they did before, with no extra queries and
+        # no extra provider calls.
         self._entity_extractor = entity_extractor
         self._graph_store = graph_store
         self._graph_retriever = graph_retriever
@@ -168,6 +172,10 @@ class RagService:
             )
             if result.scalar_one_or_none() is None:
                 return
+            # SQLite doesn't enforce the chunks table's FK cascade by
+            # default (same reason ShortTermMemoryStore.clear_session()
+            # deletes MessageRecord explicitly) — vector_store owns
+            # deleting document_chunks itself, below.
             await db.execute(delete(DocumentRecord).where(DocumentRecord.id == doc_id))
             await db.commit()
         await self._vector_store.delete_document(doc_id)

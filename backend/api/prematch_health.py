@@ -1,5 +1,27 @@
 """
 Pre-Match Health Intelligence API router.
+
+Player fills in a self-report before a match -> deterministic feature
+extraction and scoring in ai/performance_ai/match_readiness_predictor/ ->
+both the raw answers and the computed assessment are persisted -> the
+assessment is served to the dashboard and to the nexus LLM Coach.
+
+This produces a performance-readiness ESTIMATE. It is not a medical
+assessment, not a diagnosis, and not an injury prediction, and every response
+says so (see DISCLAIMER below).
+
+The scoring engine is imported and called in-process, not over HTTP -- the
+same backend/ -> ai/ integration pattern backend/pipeline/runner.py uses.
+This router depends on the ReadinessScorer *interface* (injected via
+get_readiness_scorer), never on HeuristicReadinessScorer directly, so
+replacing the heuristic with a trained model later changes the one provider
+function below and no endpoint code.
+
+No metrics cache here, deliberately. backend/api/cache.py is keyed by
+match_id + scope, and this module's reads are per-player and often have no
+match_id at all (a pre-match questionnaire routinely predates its Match row).
+Its two reads are also single-row indexed lookups, not the multi-row
+aggregate scans that cache exists to spare.
 """
 
 from __future__ import annotations
@@ -110,8 +132,15 @@ def submit_questionnaire(
     db: Session = Depends(get_db),
     scorer: ReadinessScorer = Depends(get_readiness_scorer),
 ):
-    """Validated questionnaire -> features -> assessment -> both rows persisted."""
+    """Validated questionnaire -> features -> assessment -> both rows persisted.
+
+    Out-of-range answers never reach this body: Pydantic rejects them with a
+    422 from the Field constraints on PreMatchQuestionnaireRequest.
+    """
     if payload.match_id is not None:
+        # Refuse to store a dangling match reference. SQLite does not enforce
+        # foreign keys by default, so without this check a typo'd match_id
+        # would be accepted and then silently fail to join to anything.
         if not db.get(Match, payload.match_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -125,6 +154,11 @@ def submit_questionnaire(
             **payload.model_dump(),
         )
     except QuestionnaireValidationError as error:
+        # Belt and braces: the Pydantic constraints above already cover every
+        # range the engine checks (both read the same constants), so this is
+        # reachable only for things the schema cannot express, e.g. a blank
+        # player_id in the path. 422 keeps it consistent with how every other
+        # bad-input case on this endpoint is reported.
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
         ) from error
@@ -137,11 +171,14 @@ def submit_questionnaire(
         questionnaire_json=questionnaire_input.to_storable_dict(),
     )
     db.add(questionnaire_row)
-    db.flush()
+    db.flush()  # need questionnaire_row.id before constructing the assessment
 
     features = assessment.to_feature_vector()
     features["data_source"] = assessment.data_source
 
+    # See PreMatchHealthAssessment.submission_index: ordering by computed_at
+    # is unreliable at sub-clock-tick resolution, so submission order is
+    # recorded explicitly rather than inferred from a timestamp.
     previous_index = (
         db.query(func.coalesce(func.max(PreMatchHealthAssessment.submission_index), 0))
         .filter(PreMatchHealthAssessment.player_id == player_id)
@@ -168,6 +205,9 @@ def submit_questionnaire(
             }
             for f in assessment.factors
         ],
+        # The engine reports its tier as a plain string (ai/ must not import
+        # backend/); it is mapped onto the existing MetricMethod enum here
+        # rather than a parallel enum being introduced for this module.
         method=MetricMethod(assessment.method),
         schema_version=assessment.schema_version,
     )
@@ -180,7 +220,11 @@ def submit_questionnaire(
 
 @router.get("/{player_id}/latest", response_model=PreMatchAssessmentResponse)
 def get_latest_assessment(player_id: str, db: Session = Depends(get_db)):
-    """Most recent assessment for this player."""
+    """Most recent assessment for this player.
+
+    404 when there is none: an empty-but-200 response would be
+    indistinguishable from a real assessment that happened to score zero.
+    """
     row = (
         db.query(PreMatchHealthAssessment)
         .filter(PreMatchHealthAssessment.player_id == player_id)
@@ -201,7 +245,12 @@ def get_assessment_history(
     limit: int = Query(default=20, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
-    """Chronological list, newest first, for trend review across matches."""
+    """Chronological list, newest first, for trend review across matches.
+
+    Returns an empty list rather than a 404 when the player has none: "this
+    player has no history" is a true, complete answer to a list query, unlike
+    /latest where there is no single object to return.
+    """
     rows = (
         db.query(PreMatchHealthAssessment)
         .filter(PreMatchHealthAssessment.player_id == player_id)
@@ -222,7 +271,7 @@ def get_assessment_features(
     would train on and predict from."""
     row = _get_assessment_or_404(db, player_id, assessment_id)
     features = dict(row.features or {})
-    features.pop("data_source", None)
+    features.pop("data_source", None)  # provenance, not a model feature
     return PreMatchFeaturesResponse(
         assessment_id=row.id,
         player_id=row.player_id,

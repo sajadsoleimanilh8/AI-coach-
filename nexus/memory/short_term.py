@@ -12,7 +12,11 @@ from nexus.memory.storage import MessageRecord, SessionRecord, init_db, make_ses
 
 
 class ShortTermMemoryStore(MemoryStore):
-    """SQLite-backed conversation memory with a sliding window and TTL expiry."""
+    """SQLite-backed conversation memory with a sliding window and TTL expiry.
+
+    Swappable for a Postgres- or Redis-backed store later without touching
+    callers, since everything routes through the `MemoryStore` interface.
+    """
 
     def __init__(
         self,
@@ -64,6 +68,10 @@ class ShortTermMemoryStore(MemoryStore):
             result = await db.execute(
                 select(MessageRecord.id)
                 .where(MessageRecord.session_id == session_id)
+                # id (autoincrement) breaks ties deterministically when two
+                # messages land on the same created_at float — time.time()'s
+                # resolution isn't fine enough to guarantee distinct values
+                # for fast successive inserts, especially on Windows.
                 .order_by(MessageRecord.created_at.desc(), MessageRecord.id.desc())
                 .offset(self._window_size)
             )
@@ -89,6 +97,9 @@ class ShortTermMemoryStore(MemoryStore):
             ]
 
     async def clear_session(self, session_id: str) -> None:
+        # Core `delete()` bypasses the ORM's cascade config, and SQLite
+        # doesn't enforce FK constraints by default, so messages are
+        # removed explicitly to avoid orphaning them.
         async with self._session_factory() as db:
             await db.execute(delete(MessageRecord).where(MessageRecord.session_id == session_id))
             await db.execute(delete(SessionRecord).where(SessionRecord.id == session_id))

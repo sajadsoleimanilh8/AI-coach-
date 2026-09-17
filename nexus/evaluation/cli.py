@@ -124,6 +124,9 @@ async def _main_async(args: argparse.Namespace) -> int:
                 latency_tolerance=settings.evaluation.latency_tolerance,
             )
         except ProviderModeMismatchError as exc:
+            # A refusal to compare is a legitimate answer, but it is still
+            # a failure to answer the question that was asked — so it
+            # exits non-zero rather than printing "no regressions found".
             message = str(exc)
             print(json.dumps({"error": message}) if args.json else f"CANNOT COMPARE: {message}")
             await engine.dispose()

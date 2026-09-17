@@ -20,14 +20,34 @@ from nexus.training.preflight import run_preflight
 
 _CHECKPOINT_RE = re.compile(r"^checkpoint-(\d+)$")
 
+# Below this fraction of the early-run average, throughput has dropped far
+# enough that it is worth telling the user. On a laptop 5070 Ti the usual
+# cause is thermal throttling, not a code problem.
 _THROUGHPUT_WARN_RATIO = 0.75
 
+# Steps to average over before drift comparisons mean anything — the first
+# few steps include warmup and compilation and are not representative.
+#
+# Four, not ten. This warning is timed per optimizer step, and real runs
+# here are short: the 7B smoke run was 12 steps total. A ten-step baseline
+# left at most two steps to compare against and, combined with reading a
+# key that only appears in the end-of-run summary, meant the check could
+# not fire at all. Four leaves the majority of even a short run inside the
+# comparison window.
 _BASELINE_WINDOW_STEPS = 4
 
+# How many recent steps are averaged before crying throttle. A single slow
+# step is normal — an allocator stall, another process grabbing the GPU
+# for a moment — and warning on one would train users to ignore this.
 _ROLLING_WINDOW_STEPS = 3
 
+# Measured intervals discarded before any are recorded. The very first
+# timed step still carries autotuning and allocator growth, which makes it
+# an unrepresentatively slow anchor for everything after it.
 _WARMUP_STEPS_SKIPPED = 1
 
+# Rough sustained throughput for a 7B QLoRA step at seq_len 1024 on this
+# class of laptop GPU, used only to put a wall-time figure on the plan.
 _BASELINE_SAMPLES_PER_SEC_7B = 0.45
 
 
@@ -40,7 +60,12 @@ class ThroughputSample:
 
 @dataclass
 class ThroughputMonitor:
-    """Tracks samples/sec across a run and flags sustained drops."""
+    """Tracks samples/sec across a run and flags sustained drops.
+
+    Lives at module scope with no ML imports so it stays unit-testable
+    without a GPU; train() wraps it in a transformers callback rather than
+    implementing the logic inside one.
+    """
 
     warn_ratio: float = _THROUGHPUT_WARN_RATIO
     baseline_window: int = _BASELINE_WINDOW_STEPS
@@ -67,7 +92,7 @@ class ThroughputMonitor:
         that came AFTER the baseline was established. Baseline samples are
         excluded deliberately — leaving them in would drag the recent
         average back toward the very number it is being compared to, and
-        """
+        blunt exactly the sustained drop this is looking for."""
         return self.samples[self.baseline_window :][-self.rolling_window :]
 
     def check_drift(self) -> str | None:
@@ -75,6 +100,10 @@ class ThroughputMonitor:
         sustainedly below the early-run average, then stays quiet — a
         throttling laptop would otherwise emit the same warning every
         step for hours.
+
+        "Sustained" means the mean of up to `rolling_window` recent steps,
+        not a single reading: once a run is long enough to fill the
+        window, one stalled step no longer trips the warning on its own.
         """
         baseline = self.baseline
         if baseline is None or baseline <= 0 or self._warned:
@@ -104,6 +133,17 @@ class ThroughputMonitor:
 class StepThroughputTracker:
     """Turns step start/end timestamps into samples/sec and feeds them to
     a ThroughputMonitor.
+
+    This exists because the previous warning read
+    `train_samples_per_second` out of the log dict, and HF emits that key
+    ONLY in the single end-of-run summary — never per step. The monitor
+    therefore saw at most one sample per run, never reached a baseline,
+    and could not fire under any circumstances. Timing the steps here is
+    the only way this check measures anything at all.
+
+    Timestamps are passed IN rather than read from the clock, so the whole
+    thing is drivable from a test with synthetic timings — no GPU, no
+    transformers, no sleeping.
     """
 
     samples_per_step: int
@@ -120,7 +160,7 @@ class StepThroughputTracker:
         and evaluation all happen after on_step_end and before the next
         on_step_begin, so an end-to-end interval would charge a save's
         several seconds to the following step and report a throughput
-        """
+        collapse that is really just a checkpoint being written."""
         started_at, self._step_started_at = self._step_started_at, None
         if started_at is None:
             return None
@@ -177,6 +217,17 @@ def stratified_split(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Splits rows into (train, val), holding out `val_split` of EACH
     task_type rather than of the dataset as a whole.
+
+    Stratified because the split is small and the types are few: a plain
+    random 10% of ~60 rows can easily contain no `health_safe` example at
+    all, and the eval loss would then be silent about the one behaviour
+    that matters most. Holding out a share of every type makes the
+    validation loss mean the same thing for each.
+
+    Deterministic under `seed` — the same seed gives the same split, so a
+    resumed or repeated run is comparable to the original. Groups are
+    sorted by name before shuffling so the result does not depend on the
+    order rows happened to appear in the file.
     """
     if not 0.0 < val_split < 1.0:
         raise StratificationError(f"val_split must be strictly between 0 and 1, got {val_split}")
@@ -190,9 +241,17 @@ def stratified_split(
     too_small: list[str] = []
 
     for task_type in sorted(grouped):
+        # Sorted by CONTENT before shuffling, not left in file order, so
+        # the split depends only on the rows themselves. Regenerating the
+        # dataset in a different order then still yields the same split
+        # for the same seed, which is what makes two runs comparable.
         group = sorted(grouped[task_type], key=lambda r: json.dumps(r, sort_keys=True))
         random.Random(f"{seed}:{task_type}").shuffle(group)
 
+        # At least one of every type on each side, which is the whole
+        # point of stratifying — so a type with fewer than 2 examples
+        # cannot be split at all and is reported rather than silently
+        # dropped from one side.
         held_out = max(1, int(len(group) * val_split))
         if held_out >= len(group):
             too_small.append(f"{task_type} (n={len(group)})")
@@ -245,6 +304,12 @@ def build_training_plan(config: TrainingConfig, *, dataset_path: str | Path) -> 
     example_count = count_examples(dataset_path)
     param_count_b = infer_param_count_b(config.base_model)
 
+    # Steps are counted against the TRAIN half, not the whole file — the
+    # validation rows are never trained on, so including them would
+    # over-report the step count and the wall-time estimate with it. Doing
+    # the real split here also means an un-stratifiable dataset fails in
+    # the dry run, before a multi-hour job starts, rather than at minute
+    # one of the real one.
     train_example_count = example_count
     val_example_count = 0
     if example_count:
@@ -327,12 +392,21 @@ def render_plan(plan: dict[str, Any]) -> str:
 
 
 def source_kwargs(base_model: str) -> dict[str, Any]:
-    """Extra from_pretrained kwargs for a base model that may be a local path."""
+    """Extra from_pretrained kwargs for a base model that may be a local path.
+
+    A base_model that names an existing directory is pinned with
+    local_files_only=True. WHY: this machine's network is unreliable, and a
+    Hub call that hangs is indistinguishable from a crashed run — so the
+    weights we already have on disk must never put the network on the
+    critical path. A Hub id is left alone so it can still resolve normally.
+    """
     if not base_model:
         return {}
     try:
         is_local_dir = Path(base_model).expanduser().is_dir()
     except OSError:
+        # A Hub id like "org/model" is a legal string but not a legal path
+        # on Windows; that is a "not a local dir" answer, not an error.
         return {}
     return {"local_files_only": True} if is_local_dir else {}
 
@@ -343,7 +417,6 @@ def train(config: TrainingConfig, *, dataset_path: str | Path, resume: bool = Fa
     no CUDA toolchain must keep working, because the config, plan, and
     preflight logic above it are used exactly there."""
     import torch
-    from datasets import load_dataset
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
     from transformers import (
         AutoModelForCausalLM,
@@ -355,9 +428,15 @@ def train(config: TrainingConfig, *, dataset_path: str | Path, resume: bool = Fa
     )
     from trl import SFTTrainer
 
+    from datasets import load_dataset
+
     torch.manual_seed(config.seed)
 
     tracker = StepThroughputTracker(
+        # One on_step_end is one OPTIMIZER step, so a step consumes a full
+        # effective batch. The trailing partial batch of an epoch consumes
+        # fewer and therefore reads slightly fast, which can only ever
+        # suppress this warning, never manufacture one.
         samples_per_step=config.batch_size * config.gradient_accumulation_steps,
     )
 
@@ -365,7 +444,10 @@ def train(config: TrainingConfig, *, dataset_path: str | Path, resume: bool = Fa
         """Thin adapter — all the timing and drift logic lives in
         StepThroughputTracker/ThroughputMonitor at module scope, so both
         can be tested without transformers or a GPU.
-        """
+
+        on_step_begin/on_step_end, NOT on_log: HF logs
+        train_samples_per_second only in the end-of-run summary, which is
+        why the previous version of this callback could never fire."""
 
         def on_step_begin(self, args, state, control, **kwargs):  # noqa: ANN001
             tracker.on_step_begin(time.monotonic())
@@ -384,6 +466,7 @@ def train(config: TrainingConfig, *, dataset_path: str | Path, resume: bool = Fa
             bnb_4bit_compute_dtype=getattr(torch, config.bnb_4bit_compute_dtype),
         )
 
+    # Both from_pretrained calls take the same local/Hub resolution decision.
     from_pretrained_kwargs = source_kwargs(config.base_model)
     if from_pretrained_kwargs:
         print(f"Loading base model from local directory {config.base_model}", flush=True)
@@ -413,6 +496,10 @@ def train(config: TrainingConfig, *, dataset_path: str | Path, resume: bool = Fa
     )
     model = get_peft_model(model, peft_config)
 
+    # Split BEFORE the trainer sees anything, in plain Python, and write
+    # both halves to disk. The split is then inspectable after the fact —
+    # which rows were held out is part of interpreting the eval loss, not
+    # an implementation detail to keep in memory.
     train_rows, val_rows = stratified_split(
         read_jsonl(dataset_path), val_split=config.val_split, seed=config.seed
     )
@@ -441,6 +528,8 @@ def train(config: TrainingConfig, *, dataset_path: str | Path, resume: bool = Fa
         save_steps=config.save_steps,
         save_total_limit=config.save_total_limit,
         logging_steps=10,
+        # Held-out loss on the same cadence checkpoints are written, so
+        # the best checkpoint is one that actually exists on disk.
         eval_strategy="steps",
         eval_steps=config.eval_steps,
         save_strategy="steps",
@@ -501,10 +590,14 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     config = TrainingConfig.from_yaml(args.config) if args.config else TrainingConfig()
 
+    # A dry run must import nothing from the ML stack, so it gets the
+    # plan-and-data checks only; a real run probes the GPU first.
     result = run_preflight(config, dataset_path=args.dataset, probe_gpu=not args.dry_run)
     try:
         plan = build_training_plan(config, dataset_path=args.dataset)
     except StratificationError as exc:
+        # Loud, but not a traceback: an unsplittable dataset is a data
+        # problem the user can fix, and it must stop the run either way.
         print(f"Refusing to start: the dataset cannot be split for validation.\n  {exc}")
         return 1
 

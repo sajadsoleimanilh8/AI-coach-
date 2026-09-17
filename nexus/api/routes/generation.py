@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 
 from nexus.api.schemas import GenerationRequest, PersonalizedPlanResponse, UsageSchema
+from nexus.api.services import get_services
 from nexus.core.exceptions import (
     ContextLengthExceededError,
     ModelNotFoundError,
@@ -25,7 +26,7 @@ async def generate_plan(
             detail=f"Unknown request_type={request_type!r}; expected one of {sorted(_VALID_REQUEST_TYPES)}.",
         )
 
-    generator: PersonalizedGenerator = request.app.state.personalized_generator
+    generator: PersonalizedGenerator = get_services(request).personalized_generator
     try:
         plan = await generator.generate(
             user_id=payload.user_id, request_type=request_type, constraints=payload.constraints

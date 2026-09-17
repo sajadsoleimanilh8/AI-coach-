@@ -1,4 +1,16 @@
-"""GET /api/matches -- the endpoint that makes a match id discoverable."""
+"""GET /api/matches -- the endpoint that makes a match id discoverable.
+
+Before this existed the dashboard's four match-scoped tabs (Player, Team,
+Calibration, Simulation) could only be used by someone who had uploaded a clip
+in the current browser session or who already knew a UUID. These tests pin the
+two properties that make the listing safe to choose from:
+
+  - a match with no tracking rows is LISTED, and reports zero, rather than
+    being hidden -- someone whose job failed still has to be able to see that
+    their upload exists;
+  - `video_file_exists` reflects the filesystem, not the row, so the picker
+    never advertises a clip that has been deleted from disk.
+"""
 from __future__ import annotations
 
 import pytest
@@ -22,7 +34,11 @@ def db(tmp_path):
 
 
 def _list(db, limit: int = 50):
-    """Called directly, so `limit` must be a real int."""
+    """Called directly, so `limit` must be a real int.
+
+    FastAPI resolves Query(default=...) only when it dispatches a request; a
+    direct call would otherwise hand SQLAlchemy the Query object itself.
+    """
     from backend.api.tracking import list_matches
 
     return list_matches(limit=limit, db=db)
@@ -43,6 +59,8 @@ def _add_match(db, *, tracking_rows: int = 0, storage_path: str | None = None,
 
     if storage_path is not None:
         video = M.Video(match_id=match.match_id, original_filename="clip.mp4",
+                        # videos.stored_filename is UNIQUE -- key it to this
+                        # match so a test can create more than one video.
                         stored_filename=f"{match.match_id}.mp4", file_size=1,
                         storage_path=storage_path)
         db.add(video)
@@ -62,6 +80,7 @@ def test_lists_matches_with_their_real_tracking_counts(db):
 
     assert set(rows) == {empty, full}
     assert rows[full].tracking_rows == 7
+    # Listed, not hidden -- and honest about having nothing.
     assert rows[empty].tracking_rows == 0
 
 
@@ -77,6 +96,8 @@ def test_video_file_existence_is_read_from_disk(db, tmp_path):
     rows = {r.match_id: r for r in _list(db)}
 
     assert rows[on_disk].video_file_exists is True
+    # The Video row exists; the file does not. Reporting True here is how the
+    # picker would hand the UI a video URL that 404s.
     assert rows[deleted].video_file_exists is False
 
 
@@ -92,6 +113,7 @@ def test_job_status_is_reported_and_absent_job_is_none(db, tmp_path):
 
     assert rows[with_job].job_status == "failed"
     assert rows[with_job].job_id is not None
+    # Never processed is None, not a fabricated "pending".
     assert rows[no_video].job_status is None
     assert rows[no_video].job_id is None
 

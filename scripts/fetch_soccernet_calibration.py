@@ -1,25 +1,77 @@
 """
 Fetch the SoccerNet calibration-2023 dataset into datasets/external/.
+
+WHY THIS SCRIPT EXISTS
+    SoccerNet is not a file you can wget. The frames and their line
+    annotations are only published through the `SoccerNet` pip package,
+    which resolves the current mirror at runtime:
+
+        pip install SoccerNet
+        from SoccerNet.Downloader import SoccerNetDownloader as SNdl
+        SNdl(LocalDirectory=...).downloadDataTask(
+            task="calibration-2023", split=["train", "valid", "test"])
+
+    This wraps that call so the destination comes from the registry
+    (configs/datasets.yaml::external_sources) instead of being retyped, and
+    so the download is followed by extraction and an actual inventory of
+    what landed on disk.
+
+    The NDA + password gate on soccer-net.org applies to the raw full-match
+    VIDEO archives. The calibration task ships still frames plus
+    annotations and downloads without one; if that ever changes, the
+    package raises and this script surfaces the error rather than leaving a
+    half-empty directory behind.
+
+WHAT YOU GET -- AND WHY IT IS NOT YET TRAINABLE
+    Each split is <frame>.jpg plus <frame>.json, where the JSON maps pitch
+    LINE names ("Big rect. left bottom", "Circle central", ...) to a
+    polyline of normalised points. That is not the format anything in this
+    repo trains on:
+
+        configs/datasets.yaml::datasets.calibration  expects YOLO pose
+        labels -- one row per image, 32 indexed keypoints (kpt_shape
+        [32, 3]) -- and the existing manual flow uses a third scheme again
+        (17 NAMED landmarks, constants.CALIBRATION_POINT_ORDER).
+
+    Converting lines -> keypoints means intersecting the annotated
+    polylines and deciding which intersection is which landmark. That
+    converter does not exist yet, so this download is registered under
+    `external_sources` (raw, documented) and NOT under `datasets` (verified
+    and trainable). Registering it as trainable would make dataset_qa.py
+    and every trainer fail on a directory that was never meant to satisfy
+    the images/ + labels/ contract.
+
+USAGE
+    python -m scripts.fetch_soccernet_calibration                # train/valid/test
+    python -m scripts.fetch_soccernet_calibration --dry-run      # show plan only
+    python -m scripts.fetch_soccernet_calibration --splits train
+    python -m scripts.fetch_soccernet_calibration --inventory    # no download
 """
 
 from __future__ import annotations
 
 import argparse
-import sys
 import zipfile
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from configs import registry as R  # noqa: E402
 
 SOURCE_NAME = "soccernet_calibration_2023"
 
+# The challenge split is deliberately NOT in the default set: its
+# annotations are withheld for the SoccerNet competition, so it downloads
+# images with nothing to learn from. Ask for it explicitly if you intend to
+# submit predictions.
 DEFAULT_SPLITS = ("train", "valid", "test")
 
 
 def _safe_extract(zf: zipfile.ZipFile, dest: Path) -> int:
-    """Extract `zf` under `dest`, refusing any member that would escape it."""
+    """Extract `zf` under `dest`, refusing any member that would escape it.
+
+    Zip archives can carry absolute paths or ../ components; Python's
+    extractall sanitises those, but silently. We reject instead, so a
+    tampered mirror is a visible failure rather than a quiet no-op.
+    """
     dest_resolved = dest.resolve()
     for member in zf.namelist():
         target = (dest / member).resolve()
@@ -32,7 +84,12 @@ def _safe_extract(zf: zipfile.ZipFile, dest: Path) -> int:
 
 
 def _extract_zip(zip_path: Path, out_root: Path, force: bool) -> Path:
-    """Extract one split zip. Returns the directory holding its contents."""
+    """Extract one split zip. Returns the directory holding its contents.
+
+    If every member already shares one top-level directory the archive is
+    unpacked as-is; otherwise a directory named after the zip is created,
+    so a flat archive does not spray thousands of frames into out_root.
+    """
     with zipfile.ZipFile(zip_path) as zf:
         tops = {Path(n).parts[0] for n in zf.namelist() if n.strip()}
         if len(tops) == 1:
@@ -77,6 +134,8 @@ def _print_inventory(root: Path) -> int:
         total_ann += ann
     print(f"  {'TOTAL':12s} images={total_img:6,d}  annotations={total_ann:6,d}")
     if total_ann and total_img != total_ann:
+        # Expected for the challenge split (annotations withheld); a
+        # mismatch anywhere else means a truncated download.
         print("  NOTE: image and annotation counts differ -- expected only "
               "for the 'challenge' split.")
     return total_img

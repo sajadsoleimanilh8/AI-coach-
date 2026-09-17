@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 
 from nexus.api.schemas import FeedbackRequest, FeedbackResponse
+from nexus.api.services import get_services
 from nexus.training.logger import InteractionLogger
 
 router = APIRouter()
@@ -10,7 +11,7 @@ router = APIRouter()
 
 @router.post("/feedback", response_model=FeedbackResponse)
 async def record_feedback(payload: FeedbackRequest, request: Request) -> FeedbackResponse:
-    logger: InteractionLogger | None = getattr(request.app.state, "interaction_logger", None)
+    logger: InteractionLogger | None = get_services(request).interaction_logger
     if logger is None:
         raise HTTPException(
             status_code=404,

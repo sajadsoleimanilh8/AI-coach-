@@ -5,6 +5,7 @@ import base64
 from fastapi import APIRouter, HTTPException, Request
 
 from nexus.api.schemas import DocumentIngestRequest, DocumentSummarySchema
+from nexus.api.services import get_services
 from nexus.core.exceptions import ProviderUnavailableError, UnsupportedDocumentType
 from nexus.rag.service import DocumentSummary, RagService
 
@@ -25,7 +26,7 @@ def _to_schema(summary: DocumentSummary) -> DocumentSummarySchema:
 async def ingest_document(
     payload: DocumentIngestRequest, request: Request
 ) -> DocumentSummarySchema:
-    rag_service: RagService = request.app.state.rag_service
+    rag_service: RagService = get_services(request).rag_service
     try:
         raw_bytes = base64.b64decode(payload.content_base64)
     except Exception as exc:
@@ -50,12 +51,12 @@ async def ingest_document(
 async def list_documents(
     request: Request, user_id: str = "default"
 ) -> list[DocumentSummarySchema]:
-    rag_service: RagService = request.app.state.rag_service
+    rag_service: RagService = get_services(request).rag_service
     summaries = await rag_service.list_documents(user_id)
     return [_to_schema(summary) for summary in summaries]
 
 
 @router.delete("/documents/{doc_id}", status_code=204)
 async def delete_document(doc_id: str, request: Request, user_id: str = "default") -> None:
-    rag_service: RagService = request.app.state.rag_service
+    rag_service: RagService = get_services(request).rag_service
     await rag_service.delete_document(user_id, doc_id)

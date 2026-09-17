@@ -13,6 +13,16 @@ from nexus.models.registry import get_model
 
 logger = get_logger("intelligence.capability_matrix")
 
+# Which capability key a suite's pass rate is evidence FOR. Suites that
+# measure something other than model capability are deliberately absent:
+#
+#   safety   — a gate, not a skill. A model that blocks every red flag is
+#              not thereby better at reasoning, and letting safety inflate
+#              a capability score would let a cautious model outrank a
+#              more capable one on tasks safety says nothing about.
+#   forecast — deterministic arithmetic over recorded signals. It exercises
+#              no model at all, so it is evidence about the code, not about
+#              whichever model happened to be configured.
 SUITE_CAPABILITY_MAP: dict[str, str] = {
     "coding": "coding",
     "math": "math",
@@ -25,6 +35,9 @@ SUITE_CAPABILITY_MAP: dict[str, str] = {
     "graph_rag": "language",
 }
 
+# Sample size at which learned evidence earns half its maximum weight.
+# Chosen so a handful of cases cannot swing model selection: at 5 samples
+# the learned score carries 0.2 weight, at 20 it carries 0.5.
 _LEARNED_WEIGHT_HALF_POINT = 20
 
 
@@ -42,6 +55,11 @@ class CapabilityMatrix:
     """Blends measured eval scores with the static models.yaml capability
     numbers, so routing improves as evidence accumulates without ever
     lurching on thin data.
+
+    Reads are SYNCHRONOUS off an in-memory cache because
+    ModelRouter._ranked_decisions() is not async — the same shape
+    LatencyTracker already uses for p50(). refresh() repopulates the cache
+    at startup and after each eval run.
     """
 
     def __init__(
@@ -55,6 +73,7 @@ class CapabilityMatrix:
         self._session_factory: async_sessionmaker = make_session_factory(engine)
         self._min_samples = min_samples
         self._max_learned_weight = max_learned_weight
+        # model_id -> capability_key -> (weighted_score, total_samples)
         self._cache: dict[str, dict[str, tuple[float, int]]] = {}
 
     async def init(self) -> None:
@@ -98,6 +117,12 @@ class CapabilityMatrix:
             result = await db.execute(select(ModelCapabilityRecord))
             rows = list(result.scalars().all())
 
+        # Several suites can map to the same capability key (routing,
+        # verification and tools all feed "reasoning"), and a capability is
+        # re-measured on every run. Aggregating as a sample-weighted mean
+        # means a 50-case suite counts for more than a 5-case one, and a
+        # capability measured repeatedly accumulates confidence rather than
+        # being overwritten by whichever run finished last.
         accumulated: dict[str, dict[str, tuple[float, int]]] = {}
         for row in rows:
             per_model = accumulated.setdefault(row.model_id, {})
@@ -129,6 +154,11 @@ class CapabilityMatrix:
     def effective_capabilities(self, model_id: str) -> dict[str, float]:
         """effective = w * measured + (1 - w) * static, with
         w = learned_weight(sample_size).
+
+        Zero samples (or fewer than min_samples) yields EXACTLY the static
+        value, so a NEXUS install that has never run an eval routes
+        identically to one running off models.yaml alone — degrading to
+        today's behavior rather than to some near-miss of it.
         """
         model_info = get_model(model_id)
         static = dict(model_info.capabilities) if model_info is not None else {}

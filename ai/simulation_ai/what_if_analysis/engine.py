@@ -1,4 +1,40 @@
-"""Transparent what-if simulation over metrics the pipeline really computed."""
+"""Transparent what-if simulation over metrics the pipeline really computed.
+
+THIS IS NOT REINFORCEMENT LEARNING, and it is not a learned model of any
+kind. There is no policy, no reward, no rollout and no training step. It is
+a deterministic recomputation: take the real tracked positions this match
+produced, apply one explicitly-parameterised geometric or kinematic change
+to them, and run the SAME scoring functions the pipeline runs
+(`compute_compactness`, `detect_formation`, `compute_formation_stability`,
+`compute_weak_zones`) over the modified input.
+
+Why that constraint matters: a simulator that emits plausible-looking
+numbers from its own model would be indistinguishable, in the API response,
+from measured output. Here every simulated value is the output of the same
+function that produced the baseline, over inputs that differ in exactly one
+declared way -- so `SimulatedMetric` can name the real input it came from
+and the parameter that changed, and a reader can check it.
+
+WHAT IT CANNOT DO
+    It does not predict match outcomes, goals, or xG. Moving players 10%
+    closer together tells you what the compactness metric would read; it
+    does not tell you the team would concede less. The causal claim is not
+    available from this data and is not made -- see `caveats` on every
+    result.
+
+    It inherits every upstream limitation. If `calibration.valid` was False
+    there are no pitch coordinates, the baseline metrics are already
+    gated to None, and the simulation returns None for them too rather
+    than inventing a coordinate space to move players around in.
+
+METHOD
+    Every simulated metric carries `method="heuristic_proxy"` regardless of
+    what the underlying metric function reports. The recomputation is
+    exact, but the INTERVENTION -- "what if this team were 10% more
+    compact" -- is a hypothetical, and a hypothetical recomputed exactly is
+    still a hypothetical. Reporting `deterministic` here would claim more
+    than is true.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -6,18 +42,22 @@ from typing import Any
 
 from ai.computer_vision.tactical_analysis.formation_detection import detect_formation
 from ai.team_intelligence.formation_stability.team_shape import (
-    compute_compactness, compute_formation_stability,
+    compute_compactness,
+    compute_formation_stability,
 )
 from ai.team_intelligence.weak_zone_detection.weak_zones import compute_weak_zones
 from backend.database.models import MetricConfidence, MetricMethod
 
 SIMULATION_METHOD = MetricMethod.heuristic_proxy
 
+#: Interventions this engine accepts. Anything else is rejected loudly --
+#: silently ignoring an unknown knob would report the baseline as if it
+#: were a simulation result.
 INTERVENTION_KINDS = (
-    "compactness",
-    "transition_speed",
-    "remove_player",
-    "swap_player",
+    "compactness",        # scale distance from the team centroid
+    "transition_speed",   # scale per-frame displacement (and thus speed)
+    "remove_player",      # take one tracked player out of the shape
+    "swap_player",        # give player A player B's tracked positions
 )
 
 
@@ -72,9 +112,9 @@ class SimulatedMetric:
     baseline_value: Any
     simulated_value: Any
     delta: float | None
-    derived_from: str
-    parameter_changed: str
-    recomputed_by: str
+    derived_from: str          # the real input this was recomputed from
+    parameter_changed: str     # the declared intervention
+    recomputed_by: str         # the actual function that produced it
     method: MetricMethod = SIMULATION_METHOD
     confidence: MetricConfidence = MetricConfidence.normal
     source_metric_id: str | None = None
@@ -121,6 +161,9 @@ class SimulationResult:
         }
 
 
+# ----------------------------------------------------------------------
+# Position transforms -- the only place the input is altered
+# ----------------------------------------------------------------------
 
 def _positioned(points) -> list:
     return [p for p in points if getattr(p, "pitch_x_m", None) is not None]
@@ -162,6 +205,10 @@ def _apply(team_traj: dict, iv: Intervention) -> dict:
         c = _centroid(team_traj)
         if c is None:
             return traj
+        # +10% compactness => every player 10% closer to the centroid. The
+        # convex hull shrinks accordingly, which is exactly what
+        # compute_compactness measures, so the recomputed score moves for
+        # the same geometric reason the real one would.
         scale = 1.0 - (iv.pct / 100.0)
         for pts in traj.values():
             for p in pts:
@@ -171,6 +218,10 @@ def _apply(team_traj: dict, iv: Intervention) -> dict:
                 p.pitch_y_m = c[1] + (p.pitch_y_m - c[1]) * scale
 
     elif iv.kind == "transition_speed":
+        # Scale each player's frame-to-frame displacement about their own
+        # first positioned point: the shape is preserved, the distance
+        # covered between frames is not. Formation STABILITY reads
+        # between-frame movement, so that is the metric this moves.
         factor = 1.0 + (iv.pct / 100.0)
         for pts in traj.values():
             positioned = _positioned(pts)
@@ -197,6 +248,10 @@ def _apply(team_traj: dict, iv: Intervention) -> dict:
             raise SimulationError(
                 f"swap_player needs both players tracked in team {iv.team_id}; "
                 f"tracked: {sorted(traj)}")
+        # A really takes B's movement: this is the "what if we played
+        # someone with this player's actual movement profile here" case,
+        # built from B's REAL tracked positions rather than a synthesised
+        # profile.
         donor = traj[iv.other_player_id]
         traj[iv.player_id] = [_Pt(iv.player_id, p.frame_id, p.team_id,
                                   p.pitch_x_m, p.pitch_y_m, p.speed) for p in donor]
@@ -204,6 +259,9 @@ def _apply(team_traj: dict, iv: Intervention) -> dict:
     return traj
 
 
+# ----------------------------------------------------------------------
+# Scoring
+# ----------------------------------------------------------------------
 
 def _positions(team_traj: dict) -> list[tuple[float, float]]:
     return [(p.pitch_x_m, p.pitch_y_m) for pts in team_traj.values() for p in _positioned(pts)]
@@ -257,6 +315,8 @@ _RECOMPUTED_BY = {
     "weak_zone_map": "ai.team_intelligence.weak_zone_detection.weak_zones.compute_weak_zones",
 }
 
+#: Which metrics an intervention can actually move. Reporting a metric the
+#: intervention cannot affect invites reading noise as signal.
 _AFFECTED = {
     "compactness": ("compactness_score", "formation", "weak_zone_map"),
     "transition_speed": ("formation_stability_score", "compactness_score"),
@@ -272,7 +332,18 @@ def simulate(
     directions=None,
     baseline_provenance: dict[str, dict[str, dict[str, Any]]] | None = None,
 ) -> SimulationResult:
-    """Recomputes team metrics under the given interventions."""
+    """Recomputes team metrics under the given interventions.
+
+    Args:
+        trajectories_by_team: {team_id: {player_id: [TrackingPoint, ...]}},
+            i.e. the output of runner._split_by_team().
+        interventions: the declared changes. All are applied to the same
+            baseline, then scored once -- not chained.
+        team_assignment_confidence: passed straight through to the real
+            scorers so their gates behave exactly as in the pipeline.
+        directions: optional AttackingDirectionResult, for formation
+            orientation.
+    """
     for iv in interventions:
         iv.validate()
 
@@ -333,6 +404,9 @@ def simulate(
                 metric_name=name,
                 team_id=str(target),
                 baseline_value=bv,
+                # An unavailable baseline yields an unavailable simulation.
+                # Reporting a number here would be the one thing this
+                # engine exists to avoid.
                 simulated_value=sv if bv is not None else None,
                 delta=delta if bv is not None else None,
                 derived_from=(

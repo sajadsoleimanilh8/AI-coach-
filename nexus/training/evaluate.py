@@ -24,10 +24,14 @@ def is_promotable(run: EvalRun, findings: list[RegressionFinding]) -> tuple[bool
     outright. Subjective quality does not enter into it: a model that feels
     better but drops a single safety case is not promoted, because the
     safety suite carries zero regression tolerance by construction (see
-    """
+    nexus/evaluation/regression.py)."""
     blockers: list[str] = []
 
     if run.provider_mode != "real":
+        # A fakes run scores whatever its scripts dictate — the fake chat
+        # provider returns empty content, which sails through every
+        # prohibited-output rule. That is a measurement of the harness,
+        # not of a model, and must never reach a promotion verdict.
         blockers.append(
             f"run used provider_mode={run.provider_mode!r}, not 'real' — nothing in it "
             f"called the model under test, so it cannot support a promotion decision"
@@ -63,6 +67,17 @@ async def evaluate_custom_model(
 ) -> tuple[EvalRun, list[RegressionFinding]]:
     """Runs the Group D harness PINNED to `model_id` and compares it to the
     most recent baseline recorded in the same provider mode.
+
+    The pin is the point. Before it, this function ran a normal-routing
+    evaluation and stamped the custom model's name on the result
+    afterwards, so it reported a measurement of a model it had never
+    called. EvalHarness now routes model-dispatching components to
+    `model_id` and SKIPS suites that cannot honour the pin, so what comes
+    back describes this model or explicitly declines to.
+
+    Returns both the run and the findings so the caller can print them —
+    the promotion decision itself is is_promotable()'s, deliberately
+    separate from the measurement.
     """
     settings = get_settings()
 
@@ -74,6 +89,9 @@ async def evaluate_custom_model(
     store = EvalStore(engine)
     await store.init()
 
+    # Only a baseline from the same provider mode can be compared against;
+    # asking for the newest run of ANY mode is what previously lined a real
+    # run up against a fakes baseline scoring 1.0 on everything.
     baseline = await store.latest_run_for_provider_mode(run.provider_mode)
     await store.save_run(run)
 
@@ -110,9 +128,15 @@ async def _main_async(args: argparse.Namespace) -> int:
             args.model_id, use_real_providers=not args.fakes
         )
     except ProviderModeMismatchError as exc:
+        # Not promotable, and not a crash either: refusing to compare is a
+        # correct outcome that the exit code has to carry.
         print(f"NOT PROMOTABLE: {args.model_id} could not be compared.\n  - {exc}")
         return 1
     except ModelNotFoundError as exc:
+        # Pinning to an unregistered model is the normal state of affairs
+        # until `ollama create` has run and models.yaml has been
+        # uncommented — a expected precondition, not a bug, so it gets an
+        # instruction rather than a traceback.
         print(
             f"NOT PROMOTABLE: {args.model_id} cannot be evaluated.\n"
             f"  - {exc}\n"
@@ -122,6 +146,10 @@ async def _main_async(args: argparse.Namespace) -> int:
         )
         return 1
     except ProviderUnavailableError as exc:
+        # A dead provider must never read as a clean run. Reporting this
+        # as anything other than a failure to measure is the same class of
+        # mistake as labelling a normal-routing run with a custom model's
+        # name.
         print(
             f"NOT PROMOTABLE: {args.model_id} was not measured.\n"
             f"  - {exc}\n"
@@ -140,6 +168,9 @@ async def _main_async(args: argparse.Namespace) -> int:
             f"  [{marker}] {suite.suite}: pass_rate={suite.pass_rate:.2f} "
             f"mean_score={suite.mean_score:.2f} n={len(suite.outcomes)}"
         )
+    # Printed as SKIP, never folded into the pass/fail lines above: a
+    # skipped suite has measured nothing about this model, and letting it
+    # read as a pass is the exact misreporting the pin was added to stop.
     for skipped in run.skipped_suites:
         print(f"  [SKIP] {skipped.suite}: {skipped.reason}")
 

@@ -10,6 +10,7 @@ from nexus.api.schemas import (
     EvalRunSchema,
     EvalSuiteResultSchema,
 )
+from nexus.api.services import get_services
 from nexus.evaluation.regression import compare_runs
 from nexus.evaluation.runner import EvalHarness
 from nexus.evaluation.store import EvalStore
@@ -45,7 +46,7 @@ def _to_schema(run: EvalRun) -> EvalRunSchema:
 
 @router.post("/eval/run", response_model=EvalRunSchema)
 async def run_eval(payload: EvalRunRequest, request: Request) -> EvalRunSchema:
-    store: EvalStore = request.app.state.eval_store
+    store: EvalStore = get_services(request).eval_store
     harness = EvalHarness(use_real_providers=payload.use_real_providers)
     run = await harness.run(payload.suites)
     await store.save_run(run)
@@ -54,14 +55,14 @@ async def run_eval(payload: EvalRunRequest, request: Request) -> EvalRunSchema:
 
 @router.get("/eval/runs", response_model=list[EvalRunSchema])
 async def list_eval_runs(request: Request, limit: int = 20) -> list[EvalRunSchema]:
-    store: EvalStore = request.app.state.eval_store
+    store: EvalStore = get_services(request).eval_store
     runs = await store.list_runs(limit=limit)
     return [_to_schema(r) for r in runs]
 
 
 @router.get("/eval/runs/{run_id}", response_model=EvalRunSchema)
 async def get_eval_run(run_id: str, request: Request) -> EvalRunSchema:
-    store: EvalStore = request.app.state.eval_store
+    store: EvalStore = get_services(request).eval_store
     run = await store.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"No eval run found for run_id={run_id!r}.")
@@ -72,7 +73,7 @@ async def get_eval_run(run_id: str, request: Request) -> EvalRunSchema:
 async def compare_eval_runs(
     request: Request, baseline: str = Query(...), candidate: str = Query(...)
 ) -> EvalCompareResponse:
-    store: EvalStore = request.app.state.eval_store
+    store: EvalStore = get_services(request).eval_store
     baseline_run = await store.get_run(baseline)
     if baseline_run is None:
         raise HTTPException(status_code=404, detail=f"No eval run found for run_id={baseline!r}.")
@@ -80,7 +81,7 @@ async def compare_eval_runs(
     if candidate_run is None:
         raise HTTPException(status_code=404, detail=f"No eval run found for run_id={candidate!r}.")
 
-    settings = request.app.state.settings
+    settings = get_services(request).settings
     findings = compare_runs(
         baseline_run, candidate_run,
         pass_rate_tolerance=settings.evaluation.pass_rate_tolerance,

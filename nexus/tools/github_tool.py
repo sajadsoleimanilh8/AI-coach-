@@ -42,7 +42,7 @@ class GitHubTool(Tool):
     ) -> None:
         self._token = token
         self._timeout_seconds = timeout_seconds
-        self._transport = transport
+        self._transport = transport  # test seam: inject httpx.MockTransport
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(

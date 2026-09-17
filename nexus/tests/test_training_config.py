@@ -9,7 +9,7 @@ def test_defaults_are_tuned_for_a_12gb_card() -> None:
     assert config.available_vram_gb == 12.0
     assert config.batch_size == 1
     assert config.gradient_accumulation_steps == 16
-    assert config.max_seq_length == 1024
+    assert config.max_seq_length == 1024  # halved from the usual 2048
     assert config.load_in_4bit is True
     assert config.gradient_checkpointing is True
     assert config.optim == "paged_adamw_8bit"
@@ -18,6 +18,8 @@ def test_defaults_are_tuned_for_a_12gb_card() -> None:
 
 
 def test_dataloader_workers_capped_for_windows_spawn() -> None:
+    # Windows spawns rather than forks workers, so past ~8 the process
+    # startup cost exceeds what the parallelism returns.
     assert TrainingConfig().dataloader_num_workers <= 8
 
 
@@ -67,16 +69,24 @@ def test_param_count_inferred_from_model_name() -> None:
 
 
 def test_param_count_falls_back_rather_than_raising() -> None:
+    # A stated fallback beats refusing to describe the config at all.
     assert infer_param_count_b("org/model-without-a-size") == 7.0
 
 
 def test_total_steps_accounts_for_accumulation_and_epochs() -> None:
     config = TrainingConfig(batch_size=1, gradient_accumulation_steps=16, num_epochs=3)
 
+    # 320 examples / 16 effective batch = 20 steps per epoch, times 3 epochs.
     assert total_training_steps(config, example_count=320) == 60
 
 
 def test_total_steps_ceils_a_trailing_partial_batch_like_hf_does() -> None:
+    # The exact case the smoke run exposed. 61 examples at an effective
+    # batch of 16 is 3.8 batches per epoch; HF's Trainer still takes an
+    # optimizer step on the trailing partial batch, so it runs 4 per epoch
+    # and 12 in total. Flooring reported 9 — which then flowed into the
+    # wall-time estimate and the save_steps schedule. Only a dataset size
+    # that does NOT divide evenly can catch this: 320/16 passes either way.
     config = TrainingConfig(batch_size=1, gradient_accumulation_steps=16, num_epochs=3)
 
     assert total_training_steps(config, example_count=61) == 12
@@ -85,6 +95,7 @@ def test_total_steps_ceils_a_trailing_partial_batch_like_hf_does() -> None:
 def test_total_steps_matches_hf_arithmetic_across_remainders() -> None:
     config = TrainingConfig(batch_size=2, gradient_accumulation_steps=4, num_epochs=1)
 
+    # effective batch 8: every remainder from 1 to 7 still costs a step.
     assert total_training_steps(config, example_count=8) == 1
     assert total_training_steps(config, example_count=9) == 2
     assert total_training_steps(config, example_count=15) == 2
@@ -99,6 +110,10 @@ def test_total_steps_never_returns_zero_for_a_tiny_dataset() -> None:
 
 
 def test_local_directory_base_model_pins_from_pretrained_offline(tmp_path) -> None:
+    # The run that motivated this died in from_pretrained resolving
+    # "mistralai/Mistral-7B-Instruct-v0.3" against an incomplete HF cache
+    # snapshot. A base_model that names a real directory must never reach
+    # the Hub at all.
     from nexus.training.train import source_kwargs
 
     model_dir = tmp_path / "Mistral-7B-Instruct-v0.3"
@@ -110,6 +125,8 @@ def test_local_directory_base_model_pins_from_pretrained_offline(tmp_path) -> No
 def test_hub_id_base_model_is_left_resolvable() -> None:
     from nexus.training.train import source_kwargs
 
+    # A Hub id is not a path on this filesystem; pinning it offline would
+    # break the default config for anyone who does have network.
     assert source_kwargs("mistralai/Mistral-7B-Instruct-v0.3") == {}
     assert source_kwargs("") == {}
 
@@ -117,4 +134,6 @@ def test_hub_id_base_model_is_left_resolvable() -> None:
 def test_nonexistent_local_path_is_not_pinned_offline(tmp_path) -> None:
     from nexus.training.train import source_kwargs
 
+    # A typo'd path must fall through to normal resolution and produce the
+    # ordinary "not found" error, not a confusing offline-mode one.
     assert source_kwargs(str(tmp_path / "does-not-exist")) == {}

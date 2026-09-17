@@ -28,7 +28,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         self._model_id = model_id
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
-        self._transport = transport
+        self._transport = transport  # test seam: inject httpx.MockTransport
 
     def _require_api_key(self) -> str:
         if not self._api_key:

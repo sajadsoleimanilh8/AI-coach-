@@ -82,14 +82,14 @@ async def test_dimensions_with_no_signals_are_absent_not_defaulted(tmp_path) -> 
 @pytest.mark.asyncio
 async def test_get_state_excludes_signals_older_than_recent_window(tmp_path) -> None:
     engine = await _make_engine(tmp_path)
-    async_engine = engine._engine
+    async_engine = engine._engine  # test-internal: reach past the store to seed a specific age
     await _insert_raw(
         async_engine,
         user_id="u1",
         dimension="physical.energy",
         value=0.9,
         source="explicit",
-        age_days=30,
+        age_days=30,  # outside the 14-day recent_window_days
     )
 
     state = await engine.get_state("u1")
@@ -102,6 +102,9 @@ async def test_recency_and_source_weighted_mean_matches_hand_computed_value(tmp_
     engine = await _make_engine(tmp_path)
     async_engine = engine._engine
 
+    # weight = source_confidence * 0.5 ** (age_days / half_life_days)
+    # signal A: explicit (0.95), age 0d  -> weight = 0.95 * 1.0    = 0.95
+    # signal B: behavioral (0.75), age 7d -> weight = 0.75 * 0.5   = 0.375
     await _insert_raw(
         async_engine, user_id="u1", dimension="physical.energy", value=0.8,
         source="explicit", age_days=0.0,
@@ -138,6 +141,8 @@ async def test_confidence_scales_with_sample_count_up_to_five(tmp_path) -> None:
     state = await engine.get_state("u1")
     dim = state.dimensions["mental.focus"]
 
+    # 5 samples hits the min(1.0, sample_count/5) cap, so confidence equals
+    # the mean source confidence exactly (0.95), not something scaled down.
     assert dim.confidence == pytest.approx(0.95, rel=1e-6)
     assert dim.sample_count == 5
 

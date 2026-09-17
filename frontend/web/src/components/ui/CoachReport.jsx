@@ -106,7 +106,6 @@ export function CoachReport({ report }) {
           .split('\n')
           .filter((line) => line.trim())
           .map((line, index) => (
-            // eslint-disable-next-line react/no-array-index-key
             <p key={index}>{line}</p>
           ))}
       </div>

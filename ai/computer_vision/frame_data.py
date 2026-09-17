@@ -1,13 +1,46 @@
 """
 FrameData -- the single synchronised per-frame representation.
+
+WHY THIS EXISTS
+    Before this module the pipeline passed detector output around as loose
+    lists and dicts: `frames` was a list[list[TrackedDetection]], the ball's
+    pitch track was a separate list[dict] built inline in
+    runner.py::_build_trajectories(), calibration was a bare
+    `(H, confidence)` tuple, and there was no representation at all for
+    field or goalpost detections (those models did not exist).
+
+    With five models now feeding the pipeline, "which frame does this
+    belong to" has to be answered in one place. FrameData is that place.
+
+WHAT IT IS NOT
+    Not a replacement for TrackedDetection or TrackingPoint -- it composes
+    them. TrackedDetection stays the per-box detector output whose field
+    names match the PlayerDetection table; TrackingPoint stays the enriched
+    pitch-space trajectory sample. FrameData is the per-frame envelope that
+    holds them together with the other four models' output.
+
+HONESTY RULES ENCODED HERE (do not weaken)
+    1. Every inferred value is distinguishable from a measured one.
+       BallObservation.source is `detected` | `interpolated` | `missing`,
+       and interpolated points carry the frame span they were inferred
+       across. Downstream consumers can therefore refuse to count an
+       interpolated ball as evidence of a pass or shot.
+    2. Absence is representable. `ball=None`, `field=None`,
+       `goalposts=[]` and `calibration.valid=False` are all legal states
+       that mean "not measured this frame" -- never silently substituted
+       with a plausible-looking default.
+    3. Calibration validity is explicit, not re-derived by each consumer.
+       CalibrationState.valid is computed once, from the confidence gate
+       plus geometric consistency, and read everywhere.
 """
 
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Iterable
+from typing import Any
 
 from ai.computer_vision.player_tracking.tracker import TrackedDetection
 from ai.computer_vision.tactical_analysis.constants import (
@@ -17,7 +50,11 @@ from ai.computer_vision.tactical_analysis.constants import (
 
 
 class BallSource(str, Enum):
-    """Provenance of a ball position."""
+    """Provenance of a ball position.
+
+    `interpolated` exists so that possession/pass/shot heuristics can weigh
+    (or reject) inferred positions. A ball position invented with no nearby
+    detection is never emitted at all -- see interpolate_ball_gaps()."""
 
     detected = "detected"
     interpolated = "interpolated"
@@ -25,17 +62,17 @@ class BallSource(str, Enum):
 
 
 class CalibrationSource(str, Enum):
-    manual = "manual"
-    model = "model"
-    carried = "carried"
+    manual = "manual"          # operator clicks -- manual_calibration.py
+    model = "model"            # automatic keypoint detection
+    carried = "carried"        # reused from an earlier frame (static camera)
     none = "none"
 
 
 class CameraMotion(str, Enum):
-    static = "static"
-    panning = "panning"
-    cut = "cut"
-    unknown = "unknown"
+    static = "static"          # below the motion threshold -- reuse calibration
+    panning = "panning"        # meaningful shift -- recalculation warranted
+    cut = "cut"                # scene change -- previous calibration invalid
+    unknown = "unknown"        # not measured (e.g. first frame)
 
 
 @dataclass
@@ -48,7 +85,10 @@ class BallObservation:
     source: BallSource = BallSource.missing
     pitch_x_m: float | None = None
     pitch_y_m: float | None = None
+    # Frames since the last real detection. 0 on a detected frame. Lets a
+    # consumer apply its own staleness policy instead of guessing.
     missing_frames: int = 0
+    # Set only on interpolated points: the detected frames either side.
     interpolated_between: tuple[int, int] | None = None
     velocity_ms: float | None = None
 
@@ -64,11 +104,16 @@ class BallObservation:
 
 @dataclass
 class FieldRegion:
-    """Output of the field-segmentation model: where the pitch is."""
+    """Output of the field-segmentation model: where the pitch is.
 
-    polygon: list[tuple[float, float]]
+    Deliberately separate from CalibrationState. Field detection answers
+    "where is the pitch in this image"; calibration answers "how do pixels
+    map to pitch coordinates". Merging them was explicitly rejected -- see
+    docs/pipeline_architecture.md."""
+
+    polygon: list[tuple[float, float]]     # pixel-space vertices
     confidence: float
-    area_fraction: float | None = None
+    area_fraction: float | None = None     # fraction of the frame covered
 
     def contains(self, x: float, y: float) -> bool:
         """Ray-casting point-in-polygon. Used to reject calibration
@@ -102,6 +147,9 @@ class GoalpostDetection:
     confidence: float
     pitch_x_m: float | None = None
     pitch_y_m: float | None = None
+    # "left" | "right" once a homography exists to place it on the pitch.
+    # None until then -- never guessed from pixel position alone, because
+    # which side of the frame a goal appears on depends on camera angle.
     side: str | None = None
 
     def center(self) -> tuple[float, float]:
@@ -117,30 +165,90 @@ class GoalpostDetection:
 
 @dataclass
 class CalibrationState:
-    """Per-frame calibration status."""
+    """Per-frame calibration status.
 
-    H: Any = None
+    `valid` is computed ONCE here rather than each consumer re-deriving
+    `confidence >= HOMOGRAPHY_CONFIDENCE_MIN`. Several call sites in the
+    old code applied that gate and several did not; centralising it is the
+    point."""
+
+    H: Any = None                                  # 3x3 ndarray or None
     confidence: float = 0.0
     reprojection_error_m: float | None = None
     n_points: int = 0
     source: CalibrationSource = CalibrationSource.none
     valid: bool = False
+    # Populated when a geometric check fails, so a low-confidence frame can
+    # be explained rather than merely flagged.
     invalid_reason: str | None = None
+    # Frame this calibration was actually solved on (may be earlier than
+    # the frame carrying it, when the camera is static and it is reused).
     solved_on_frame: int | None = None
+    # RANSAC consensus behind this fit. None means "not measured" (an exact
+    # 4-point fit, or a manual calibration), NOT "every point agreed" -- the
+    # consensus gates below are skipped rather than assumed satisfied.
     n_inliers: int | None = None
     inlier_ratio: float | None = None
+    # How many consecutive frames this calibration has been carried forward
+    # without being re-solved, and the confidence it had when first solved.
+    # 0 on the frame it was solved on. Lets a consumer apply its own
+    # staleness policy, the same way BallObservation.missing_frames does.
     carried_frames: int = 0
     solved_confidence: float | None = None
 
     @classmethod
-    def unavailable(cls, reason: str = "no calibration available") -> "CalibrationState":
+    def unavailable(cls, reason: str = "no calibration available") -> CalibrationState:
         return cls(H=None, confidence=0.0, valid=False, invalid_reason=reason)
 
     def evaluate(self, field_region: FieldRegion | None = None,
                  keypoints_px: Iterable[tuple[float, float]] | None = None,
-                 frame_size: tuple[int, int] | None = None) -> "CalibrationState":
+                 frame_size: tuple[int, int] | None = None) -> CalibrationState:
         """
         Sets `valid` from the confidence gate plus geometric consistency.
+
+        Five independent reasons to reject, each recorded in
+        `invalid_reason` rather than collapsed into a bare False:
+          - confidence below HOMOGRAPHY_CONFIDENCE_MIN (0.6), the existing
+            project-wide gate;
+          - too small a RANSAC consensus, by absolute count
+            (HOMOGRAPHY_MIN_INLIERS) or as a fraction of the offered
+            correspondences (HOMOGRAPHY_MIN_INLIER_RATIO). This gate is what
+            makes it safe for confidence to be scored on the consensus set:
+            four correspondences fit a homography with exactly zero residual
+            whether or not they are correct, so "low error" is only evidence
+            when it was earned across enough points;
+          - keypoints that fall outside the detected pitch region, which
+            indicates the landmarks were matched to the wrong part of the
+            image even though they may reproject consistently among
+            themselves;
+          - keypoints covering less than HOMOGRAPHY_MIN_POINT_SPREAD of the
+            frame area. Confidence CANNOT catch this: reprojection error is
+            lowest precisely when the points are clustered, so a handful of
+            landmarks bunched in one corner scores ~1.0 confidence while the
+            matrix extrapolates badly across the rest of the frame. The
+            spread gate is additional to the confidence gate, not a
+            replacement for it;
+          - and LAST, geometrically impossible fits -- degenerate/singular
+            matrices, mirrored pitch orientation, collapsed or
+            horizon-crossing projections (see
+            homography_geometry_problems). Reprojection error is
+            structurally blind to these, because a consistently mislabelled
+            set of landmarks has small residuals by construction. This gate
+            runs last because every gate above names a more specific
+            property of the EVIDENCE, and those are the more actionable
+            reasons to report when they apply.
+
+        A rejection here degrades to the existing `valid=False` path -- the
+        same honest-null behaviour used everywhere else. No default or
+        guessed homography is ever substituted.
+
+        `frame_size` is (width, height). When it is None the spread and
+        geometry checks are SKIPPED, because hull area is meaningless without
+        knowing what it is a fraction of. Likewise the consensus gate is
+        skipped when `n_inliers` is None, which means "RANSAC did not run"
+        (an exact 4-point fit, or a manual calibration) and not "every point
+        agreed". Callers that have the frame should pass it; the remaining
+        unthreaded caller is noted in auto_calibration.py.
         """
         from ai.computer_vision.tactical_analysis.constants import (
             HOMOGRAPHY_MIN_INLIER_RATIO,
@@ -185,6 +293,9 @@ class CalibrationState:
                     f"the detected pitch region")
                 return self
         if frame_size is not None and keypoints_px:
+            # Imported here rather than at module scope: homography.py pulls
+            # in cv2, and frame_data.py is imported by lightweight consumers
+            # (schema/serialisation paths) that should not pay for OpenCV.
             from ai.computer_vision.tactical_analysis.homography import point_spread
 
             pts = list(keypoints_px)
@@ -198,6 +309,14 @@ class CalibrationState:
                     "homography away from where they sit)")
                 return self
         if frame_size is not None:
+            # LAST, deliberately. Every gate above names a specific, more
+            # actionable property of the EVIDENCE -- too few points agreed,
+            # they sat outside the pitch, they were bunched together. This
+            # one inspects the resulting MATRIX and catches what survives
+            # all of that: a fit that is structurally impossible rather than
+            # merely poorly supported. Running it earlier would relabel a
+            # clustered point set as "collapsed projection", which is the
+            # same fact reported one step further from its cause.
             from ai.computer_vision.tactical_analysis.homography import (
                 homography_geometry_problems,
             )
@@ -220,6 +339,7 @@ class CameraState:
     calibration can be carried forward."""
 
     motion: CameraMotion = CameraMotion.unknown
+    # Median feature displacement in pixels since the previous frame.
     shift_px: float | None = None
     recalibration_advised: bool = False
 
@@ -237,13 +357,19 @@ class FrameData:
     calibration: CalibrationState = field(default_factory=CalibrationState.unavailable)
     camera: CameraState = field(default_factory=CameraState)
 
+    # ---- convenience accessors ------------------------------------
     @property
     def pitch_coordinates_usable(self) -> bool:
         """The single question most downstream consumers actually ask."""
         return self.calibration.valid
 
     def players_by_team(self) -> dict[str | None, list[TrackedDetection]]:
-        """Groups this frame's players by team_id."""
+        """Groups this frame's players by team_id.
+
+        Exists because pooling every player regardless of team_id was a
+        real bug in _score_team_intelligence() -- having the split
+        available on the frame object makes the correct thing the easy
+        thing."""
         out: dict[str | None, list[TrackedDetection]] = {}
         for det in self.players:
             out.setdefault(det.team_id, []).append(det)
@@ -282,12 +408,33 @@ class FrameData:
         }
 
 
+# ----------------------------------------------------------------------
+# Ball gap interpolation
+# ----------------------------------------------------------------------
 
 def interpolate_ball_gaps(frames: list[FrameData], *, max_gap: int = 5,
                           max_speed_px_per_frame: float = 120.0) -> int:
     """
     Fills SHORT ball-detection gaps by linear interpolation between two
     real detections, and marks every filled point `source=interpolated`.
+
+    Constraints that keep this honest -- a fabricated ball position is
+    worse than an absent one, because possession and pass detection treat
+    a ball position as evidence:
+
+      - Only gaps of at most `max_gap` frames are filled. Longer gaps stay
+        `missing`; the ball genuinely left frame or was occluded too long
+        to infer.
+      - Both endpoints must be real detections. A gap at the start or end
+        of the clip is never extrapolated, only interpolated.
+      - The implied speed between the two endpoints must be physically
+        plausible (<= `max_speed_px_per_frame`). Two detections far apart
+        in space and time are more likely to be a missed detection plus a
+        false positive than one continuous ball path, and interpolating
+        between them would draw a straight line through positions the ball
+        never occupied.
+
+    Returns the number of frames filled.
     """
     detected_idx = [i for i, f in enumerate(frames)
                     if f.ball is not None and f.ball.source is BallSource.detected]
@@ -304,20 +451,22 @@ def interpolate_ball_gaps(frames: list[FrameData], *, max_gap: int = 5,
         dy = ball_b.pixel_y - ball_a.pixel_y
         dist = math.hypot(dx, dy)
         if dist / (b - a) > max_speed_px_per_frame:
-            continue
+            continue                     # implausible -- leave the gap open
 
         for step in range(1, gap + 1):
             t = step / (b - a)
             frames[a + step].ball = BallObservation(
                 pixel_x=ball_a.pixel_x + dx * t,
                 pixel_y=ball_a.pixel_y + dy * t,
-                confidence=None,
+                confidence=None,          # not a detection -- has no detector confidence
                 source=BallSource.interpolated,
                 missing_frames=step,
                 interpolated_between=(frames[a].frame_id, frames[b].frame_id),
             )
             filled += 1
 
+    # Anything still without a ball is explicitly `missing`, with a running
+    # count of how long it has been gone.
     since = 0
     for f in frames:
         if f.ball is not None and f.ball.usable:

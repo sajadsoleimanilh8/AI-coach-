@@ -40,6 +40,8 @@ def test_gradient_checkpointing_reduces_the_estimate() -> None:
 
 
 def test_checkpointing_only_affects_activations_not_weights() -> None:
+    # Weights dominate and do not change; only the activation term moves,
+    # so the gap must be smaller than the total.
     on = _estimate(TrainingConfig(gradient_checkpointing=True))
     off = _estimate(TrainingConfig(gradient_checkpointing=False))
 
@@ -60,6 +62,7 @@ def test_estimate_scales_with_model_size() -> None:
 
 
 def test_flags_a_config_that_exceeds_available_vram() -> None:
+    # Full bf16 weights for a 7B alone are ~14GB, over a 12GB card.
     config = TrainingConfig(load_in_4bit=False)
 
     assert exceeds_available_vram(config, param_count_b=_7B)

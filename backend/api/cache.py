@@ -4,9 +4,11 @@ Implementation Spec §5.2.
 """
 
 from __future__ import annotations
+
 import json
 import logging
 import os
+
 import redis
 
 logger = logging.getLogger(__name__)
@@ -19,7 +21,7 @@ def get_redis():
     if _redis_client is None:
         try:
             _redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - cache is optional; any Redis failure degrades to no-cache
             logger.warning(f"Failed to connect to Redis at {REDIS_URL}: {e}")
             _redis_client = None
     return _redis_client
@@ -33,7 +35,7 @@ def get_cached_metrics(match_id: str, scope: str, schema_version: str = "v3") ->
         data = r.get(key)
         if data:
             return json.loads(data)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - cache miss on any Redis error, never fail the request
         logger.warning(f"Redis get error for key {key}: {e}")
     return None
 
@@ -44,7 +46,7 @@ def set_cached_metrics(match_id: str, scope: str, value: dict | list, schema_ver
     key = f"metric_cache:{match_id}:{scope}:{schema_version}"
     try:
         r.set(key, json.dumps(value, default=str))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - cache write is best-effort
         logger.warning(f"Redis set error for key {key}: {e}")
 
 def invalidate_match_cache(match_id: str) -> None:
@@ -55,5 +57,5 @@ def invalidate_match_cache(match_id: str) -> None:
         keys = r.keys(f"metric_cache:{match_id}:*")
         if keys:
             r.delete(*keys)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - cache invalidation is best-effort
         logger.warning(f"Redis invalidation error for match_id {match_id}: {e}")

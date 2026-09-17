@@ -29,7 +29,19 @@ import {
   ToggleField,
 } from '../ui/Form.jsx';
 
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+/**
+ * TAB 8 -- the 13-item pre-match mental readiness questionnaire.
+ *
+ * Grouped exactly as the schema groups it (focus / stress / confidence /
+ * motivation / pressure response), because those groupings are what the
+ * scoring engine reads, not a layout convenience.
+ *
+ * `cv_player_id` is a separate, explicitly opt-in field. It is a DIFFERENT ID
+ * space from player_id -- a ByteTrack tracking ID versus the caller's own
+ * external identifier -- and it is never inferred from player_id here, for
+ * the same reason the backend refuses to infer it: guessing a mapping would
+ * attribute one player's on-pitch data to another player's answers.
+ */
 
 const INITIAL = {
   concentration_level: 7,
@@ -275,7 +287,7 @@ export default function TabPsychology({ matchId }) {
   );
 }
 
-                                                                          
+/* ==================================================================== */
 
 function ResultPanel({ state }) {
   if (state.status === 'idle') {
@@ -397,7 +409,7 @@ export function PsychAssessmentView({ assessment }) {
   );
 }
 
-                                                                          
+/* ==================================================================== */
 
 function HistoryPanel({ playerId, matchId }) {
   const [limit, setLimit] = useState(10);

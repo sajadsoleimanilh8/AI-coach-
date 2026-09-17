@@ -17,6 +17,10 @@ class _Field:
 class _Calibrator:
     def __init__(self, confidence, keypoints=None):
         self.confidence = confidence
+        # Default point set spans most of the 120x80 test frame (hull area
+        # 4000 / 9600 = 0.417), comfortably clearing
+        # HOMOGRAPHY_MIN_POINT_SPREAD so the pre-existing tests below keep
+        # testing what they were written to test.
         self.keypoints = keypoints or [(10, 10), (90, 10), (90, 60), (10, 60)]
 
     def calibrate_frame(self, frame, field_region=None):
@@ -60,8 +64,13 @@ def test_debug_overlay_keeps_evidence_but_suppresses_invalid_projection():
 
 
 def test_debug_overlay_applies_spread_gate_despite_high_confidence():
-    """The debug route must reject a clustered fit, like the pipeline does."""
-    clustered = [(10, 10), (18, 10), (18, 16), (10, 16)]
+    """The debug route must reject a clustered fit, like the pipeline does.
+
+    Before frame_size was threaded into to_calibration_state(), this route
+    skipped the spread check entirely and would have reported this frame
+    VALID -- disagreeing with the production path on the same input.
+    """
+    clustered = [(10, 10), (18, 10), (18, 16), (10, 16)]  # 48 px^2 of 9600
     png, meta = render_calibration_debug(
         np.zeros((80, 120, 3), dtype=np.uint8), _players(),
         field_detector=_Field(), calibrator=_Calibrator(0.95, keypoints=clustered),
@@ -69,6 +78,7 @@ def test_debug_overlay_applies_spread_gate_despite_high_confidence():
     assert png.startswith(b"\x89PNG")
     assert meta["calibration_valid"] is False, "clustered points must be rejected"
     assert "spread" in (meta["invalid_reason"] or "").lower()
+    # Evidence is still drawn; only the projection is suppressed.
     assert meta["projection_suppressed"] is True
     assert meta["projected_players"] == []
     assert meta["n_keypoints"] == 4

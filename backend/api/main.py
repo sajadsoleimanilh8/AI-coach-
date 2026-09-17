@@ -1,17 +1,25 @@
 import json
+import logging
 import os
-import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
+
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from kombu.exceptions import OperationalError
 from sqlalchemy.orm import Session
 
-from backend.api import calibration_debug, player_intelligence, prematch_health, psychology, simulation, tactical, tracking
-from backend.pipeline.overlay_video import find_overlay_output, media_type_for
+from backend.api import (
+    calibration_debug,
+    player_intelligence,
+    prematch_health,
+    psychology,
+    simulation,
+    tactical,
+    tracking,
+)
 from backend.api.schemas import (
     AnalysisResultCreate,
     AnalysisResultResponse,
@@ -20,9 +28,13 @@ from backend.api.schemas import (
     ProcessingStatusResponse,
     VideoUploadResponse,
 )
+from backend.auth.api_key import require_api_key
 from backend.database.models import AnalysisResult, Match, ProcessingJob, ProcessingStatus, Video, new_id
 from backend.database.session import Base, engine, get_db
+from backend.pipeline.overlay_video import find_overlay_output, media_type_for
 from backend.tasks import process_video_job
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 UPLOAD_DIR = PROJECT_ROOT / "storage" / "uploads"
@@ -31,15 +43,43 @@ ALLOWED_VIDEO_TYPES = {
     "video/mpeg",
     "video/quicktime",
     "video/x-msvideo",
-    "application/octet-stream",
+    "video/webm",
 }
+# Some clients (curl without -H, a few browsers) send octet-stream for a
+# perfectly ordinary .mp4. Rather than accept that blanket -- which made the
+# allowlist mean "any file at all" -- accept it only when the filename still
+# claims a video extension.
+AMBIGUOUS_CONTENT_TYPES = {"application/octet-stream", None, ""}
+ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mpeg", ".mpg", ".mov", ".avi", ".webm", ".mkv"}
+
+# Without a cap, a single request could fill the storage volume. Override with
+# MAX_UPLOAD_BYTES; default 2 GiB, comfortably above a full-match clip.
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024)))
+UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 app = FastAPI(
     title="SportsStrategyCoachAI Backend",
     version="0.1.0",
     description="Video upload, processing status, and analysis JSON API.",
+    # Applied on the constructor, not per-router, so a router added later cannot
+    # accidentally ship unauthenticated. Inert unless SSC_API_KEY is set.
+    dependencies=[Depends(require_api_key)],
 )
 
+# The frontend calls this API from another origin (the Vite dev server on
+# :3000, this app on :8000), so every browser request is cross-origin. Without
+# CORSMiddleware the browser blocks the response, or the preflight OPTIONS
+# request, before any application code runs, and nothing in this app can log
+# it.
+#
+# allow_origins is explicit, never "*": browsers reject wildcard origins with
+# credentials, and an explicit list is the one place to update when a deployed
+# frontend origin is added.
+#
+# The list comes from CORS_ALLOWED_ORIGINS (see backend/.env.example) because
+# `npm run dev` silently moves to 3001/3002 when 3000 is taken, and the browser
+# then reports only "Failed to fetch". Add the real origin there instead of
+# editing this file.
 _default_cors_origins = "http://localhost:3000,http://127.0.0.1:3000"
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
@@ -47,14 +87,21 @@ CORS_ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 
+# Explicit lists rather than "*": allow_credentials=True means a wildcard here
+# would let any origin named in CORS_ALLOWED_ORIGINS drive authenticated,
+# cookie-bearing requests with arbitrary headers.
+CORS_ALLOWED_METHODS = ["GET", "POST", "PATCH", "DELETE", "OPTIONS"]
+CORS_ALLOWED_HEADERS = ["Accept", "Authorization", "Content-Type", "X-API-Key"]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=CORS_ALLOWED_METHODS,
+    allow_headers=CORS_ALLOWED_HEADERS,
 )
 
+# Register Phase 3 routers
 app.include_router(tactical.router)
 app.include_router(tactical.team_intel_router)
 app.include_router(player_intelligence.router)
@@ -68,7 +115,15 @@ app.include_router(calibration_debug.router)
 @app.on_event("startup")
 def startup():
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    Base.metadata.create_all(bind=engine)
+    # Schema bootstrap for SQLite only -- the local dev/test database, where a
+    # migration step would just be friction. On any other backend (Postgres in
+    # docker-compose.yml) the schema is owned by Alembic: creating tables here
+    # too would let the running app and the migration history disagree without
+    # anything noticing. Run: alembic upgrade head
+    if engine.dialect.name == "sqlite":
+        Base.metadata.create_all(bind=engine)
+    else:
+        logger.info("Non-SQLite database: schema is managed by Alembic (alembic upgrade head).")
 
 
 @app.get("/health")
@@ -82,10 +137,15 @@ def upload_video(
     metadata: Annotated[str | None, Form()] = None,
     db: Session = Depends(get_db),
 ):
-    if file.content_type not in ALLOWED_VIDEO_TYPES:
+    extension = Path(file.filename or "video.mp4").suffix.lower() or ".mp4"
+    if file.content_type in AMBIGUOUS_CONTENT_TYPES:
+        accepted = extension in ALLOWED_VIDEO_EXTENSIONS
+    else:
+        accepted = file.content_type in ALLOWED_VIDEO_TYPES
+    if not accepted:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"Unsupported file type: {file.content_type}",
+            detail=f"Unsupported file type: {file.content_type} ({extension})",
         )
     metadata_json = None
     if metadata:
@@ -97,13 +157,35 @@ def upload_video(
                 detail=f"metadata must be valid JSON: {error.msg}",
             ) from error
     file_id = new_id()
-    extension = Path(file.filename or "video.mp4").suffix or ".mp4"
-    stored_filename = f"{file_id}{extension.lower()}"
+    stored_filename = f"{file_id}{extension}"
     storage_path = UPLOAD_DIR / stored_filename
-    with storage_path.open("wb") as output:
-        shutil.copyfileobj(file.file, output)
-    file_size = storage_path.stat().st_size
+    file_size = 0
+    try:
+        with storage_path.open("wb") as output:
+            while chunk := file.file.read(UPLOAD_CHUNK_BYTES):
+                file_size += len(chunk)
+                if file_size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        detail=f"Upload exceeds the {MAX_UPLOAD_BYTES} byte limit.",
+                    )
+                output.write(chunk)
+    except BaseException:
+        # Never leave a partial file behind -- on the 413 path especially, that
+        # would hand an attacker the disk fill the limit exists to prevent.
+        storage_path.unlink(missing_ok=True)
+        raise
 
+    # Create the Match row here, at the one point in the system that knows this
+    # Video exists, and return its id in the upload response so the frontend
+    # can carry it forward to every /api/*_intelligence/{match_id} call.
+    #
+    # home_team/away_team/duration aren't known at upload time unless the
+    # caller supplies them via `metadata` -- default to honest placeholders
+    # rather than guessing team names; duration gets filled in for real
+    # once the pipeline actually opens the video (see
+    # backend/pipeline/runner.py::_estimate_fps and the corresponding
+    # Match.duration update after ingest).
     meta = metadata_json or {}
     match = Match(
         home_team=meta.get("team", "Home"),
@@ -112,7 +194,7 @@ def upload_video(
         duration=0.0,
     )
     db.add(match)
-    db.flush()
+    db.flush()  # need match.match_id before constructing Video below
 
     video = Video(
         id=file_id,
@@ -134,6 +216,15 @@ def upload_video(
     db.add(job)
     db.commit()
     db.refresh(job)
+    # The upload itself has already succeeded and been committed above -- the
+    # file is on disk and Match/Video/ProcessingJob rows exist. Only the
+    # hand-off to Celery can still fail here, and it fails by raising
+    # kombu.exceptions.OperationalError when the broker (Redis) is
+    # unreachable. Left unhandled that escaped as a raw 500 and stranded the
+    # job at status=queued forever: nothing would ever pick it up, but the
+    # frontend's status poller would keep waiting on it indefinitely. Mark the
+    # job failed instead, so the poller sees a terminal state and the user is
+    # told their upload was kept.
     try:
         process_video_job.delay(job.id)
     except OperationalError:
@@ -172,6 +263,26 @@ def get_video_file(video_id: str, db: Session = Depends(get_db)):
 def get_processed_video_file(video_id: str, db: Session = Depends(get_db)):
     """Streams the ANNOTATED render -- the source clip with the pipeline's own
     tracking boxes, track ids and team colours burned in.
+
+    Separate from /file rather than replacing it. The raw upload is available
+    the instant the upload finishes; this one only exists after a successful
+    run, and conflating them would mean the player either had nothing to show
+    during processing or silently swapped the user's video for a different
+    file. A 404 here means "not rendered", which the caller distinguishes
+    from "no video at all" by /file still working.
+
+    H.264/MP4, with WebM/VP8 as the fallback rung and as the format older
+    runs were written in -- see backend/pipeline/overlay_video.py's CODEC
+    note. The container is whatever actually got written, so the media type
+    is derived from the file on disk rather than asserted here: serving an
+    mp4 as video/webm makes the browser refuse a file it can decode.
+
+    RANGE REQUESTS. Starlette's FileResponse honours the Range header, which
+    this endpoint depends on rather than merely benefits from: OpenCV writes
+    the mp4 index (moov) at the END of the file, so a browser must fetch the
+    tail before it can play or seek at all. Replacing this with a plain
+    streaming response that ignores Range would break seeking in the
+    annotated video and, on a long clip, playback itself.
     """
     video = db.get(Video, video_id)
     if not video:
@@ -192,6 +303,9 @@ def get_processed_video_file(video_id: str, db: Session = Depends(get_db)):
     return FileResponse(
         rendered,
         media_type=media_type_for(rendered),
+        # Lets the browser cache the render across seeks within a session
+        # without re-fetching a file that, by construction, never changes
+        # for a given video_id unless the video is re-processed.
         headers={"Accept-Ranges": "bytes"},
     )
 
@@ -300,7 +414,8 @@ def get_pipeline_latency(job_id: str, db: Session = Depends(get_db)):
     Serves the REAL per-stage timing captured by backend/pipeline/latency.py
     during this job's run (backend/tasks.py writes it into
     AnalysisResult.result_json['pipeline_latency']). See that module's
-    docstring for why "real" is load-bearing here: this replaces a
+    docstring for why "real" is load-bearing here: these numbers can only exist
+    if this exact job actually ran this exact pipeline code.
     """
     job = db.get(ProcessingJob, job_id)
     if not job:

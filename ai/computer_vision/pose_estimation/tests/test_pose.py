@@ -1,17 +1,22 @@
 """
 Sanity checks for pose.py's shoulder_line_angle().
+
+No real image or MediaPipe model run needed -- same reasoning as
+tactical_analysis/tests/test_homography.py: synthesize known landmark
+coordinates/visibilities and check the angle math and confidence gating,
+independent of whether MediaPipe itself is installed correctly on this
+machine. estimate_body_orientation()'s MediaPipe-calling path is exercised
+separately in test_estimate_body_orientation_on_blank_image, which only
+needs mediapipe importable, not a real player photo.
+
+Run: python3 tests/test_pose.py
 """
 
 from __future__ import annotations
 
-import os
-import sys
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 import numpy as np
 
-from pose import (
+from ai.computer_vision.pose_estimation.pose import (
     MIN_LANDMARK_VISIBILITY,
     estimate_body_orientation,
     shoulder_line_angle,
@@ -22,6 +27,8 @@ def test_facing_camera_horizontal_shoulders():
     print("=" * 70)
     print("TEST 1: shoulders level (player facing camera) -> ~0 or ~180 deg")
     print("=" * 70)
+    # Left shoulder at x=0.3, right shoulder at x=0.6, same y -- a player
+    # facing the camera square-on has a horizontal shoulder line.
     result = shoulder_line_angle(
         left_shoulder_xy=(0.3, 0.5), right_shoulder_xy=(0.6, 0.5),
         left_visibility=0.95, right_visibility=0.92,
@@ -29,7 +36,7 @@ def test_facing_camera_horizontal_shoulders():
     print(f"  orientation_deg={result.orientation_deg:.2f}  confidence={result.confidence:.2f}")
     assert result.orientation_deg is not None
     assert abs(result.orientation_deg - 0.0) < 1e-6
-    assert abs(result.confidence - 0.92) < 1e-9
+    assert abs(result.confidence - 0.92) < 1e-9  # min of the two visibilities
     print("  PASS")
 
 
@@ -54,7 +61,7 @@ def test_low_visibility_returns_unmeasured_not_fake_angle():
     print("=" * 70)
     result = shoulder_line_angle(
         left_shoulder_xy=(0.3, 0.5), right_shoulder_xy=(0.6, 0.5),
-        left_visibility=0.95, right_visibility=0.2,
+        left_visibility=0.95, right_visibility=0.2,  # right shoulder occluded
     )
     print(f"  orientation_deg={result.orientation_deg}  confidence={result.confidence:.2f}")
     assert result.orientation_deg is None, "low-visibility landmark must not produce a confident-looking angle"
@@ -83,6 +90,8 @@ def test_angle_wraps_to_0_360_range():
     print("=" * 70)
     print("TEST 5: angle is always reported in [0, 360), not negative")
     print("=" * 70)
+    # Right shoulder to the LEFT of and above the left shoulder -> negative
+    # raw atan2 result before the % 360 wrap.
     result = shoulder_line_angle(
         left_shoulder_xy=(0.6, 0.5), right_shoulder_xy=(0.3, 0.3),
         left_visibility=0.9, right_visibility=0.9,
@@ -108,7 +117,7 @@ def test_estimate_body_orientation_on_blank_image():
               "The angle math this really tests (TESTS 1-5) already passed independent of "
               "this; only the MediaPipe-calling wrapper itself is unverified here.")
         return
-    blank_crop = np.zeros((128, 64, 3), dtype=np.uint8)
+    blank_crop = np.zeros((128, 64, 3), dtype=np.uint8)  # plausible player-crop aspect ratio
     result = estimate_body_orientation(blank_crop)
     print(f"  orientation_deg={result.orientation_deg}  confidence={result.confidence:.2f}")
     assert result.orientation_deg is None

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -79,13 +79,17 @@ async def client_and_provider(
     async with app.router.lifespan_context(app):
         fake_provider = FakeChatProvider()
         provider_manager = ProviderManager({"local": fake_provider})
-        app.state.provider_manager = provider_manager
-        app.state.provider = fake_provider
-        app.state.router = ModelRouter(provider_manager, list_models())
+        app.state.services.provider_manager = provider_manager
+        app.state.services.provider = fake_provider
+        app.state.services.router = ModelRouter(provider_manager, list_models())
 
+        # Swap in a fake embedding provider (real one would try to call a
+        # local Ollama instance this test suite never starts) while
+        # reusing the same on-disk SQLite file the rest of app.state
+        # already points at.
         engine = create_async_db_engine(_memory_db_env)
         vector_store = SqliteVectorStore(engine)
-        app.state.rag_service = RagService(
+        app.state.services.rag_service = RagService(
             engine, FakeEmbeddingProvider(), vector_store, chunk_size=500, chunk_overlap=50
         )
 

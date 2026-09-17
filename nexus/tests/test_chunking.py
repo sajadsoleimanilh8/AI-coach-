@@ -21,9 +21,12 @@ def test_chunk_size_is_respected() -> None:
 
 
 def test_consecutive_chunks_overlap() -> None:
-    text = "0123456789" * 10
+    text = "0123456789" * 10  # 100 chars
     chunks = chunk_text(text, chunk_size=40, overlap=10)
 
+    # Each chunk after the first should start 30 chars (step) into the
+    # previous one, i.e. the last 10 chars of chunk[i] == first 10 of
+    # chunk[i+1] when there's no whitespace-stripping in play.
     for first, second in zip(chunks, chunks[1:]):
         assert first[-10:] == second[:10]
 
@@ -31,6 +34,7 @@ def test_consecutive_chunks_overlap() -> None:
 def test_full_text_is_covered_by_chunks() -> None:
     text = "x" * 97
     chunks = chunk_text(text, chunk_size=30, overlap=5)
+    # last chunk must reach the end of the text
     assert "".join(chunks)[-1] == text[-1]
     reconstructed_end = chunks[-1]
     assert text.endswith(reconstructed_end)

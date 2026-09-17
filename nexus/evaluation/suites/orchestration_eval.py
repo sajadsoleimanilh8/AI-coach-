@@ -11,7 +11,19 @@ from nexus.evaluation.types import CaseOutcome, EvalCase
 
 
 class OrchestrationEvaluator(Evaluator):
-    """Two case shapes, because delegation has two things worth gating."""
+    """Two case shapes, because delegation has two things worth gating.
+
+    "guard" cases replay a sequence of delegation attempts against a real
+    DelegationGuard and assert exactly which are accepted — depth, total,
+    and repeat rejection, with no provider involved at all.
+
+    "run" cases drive the REAL OrchestratorAgent through the REAL
+    AgentRuntime with a scripted fake provider, asserting that delegate
+    calls actually flow through the tool loop and land in
+    AgentResult.delegation_steps. Scripting the provider is what makes the
+    case deterministic — a live model choosing its own decomposition is
+    not reproducible enough for a regression gate.
+    """
 
     suite = "orchestration"
 
@@ -85,6 +97,8 @@ class OrchestrationEvaluator(Evaluator):
                     ],
                 )
             )
+            # The specialist's own tool loop consumes one result: a plain
+            # answer, which ends its loop immediately.
             provider.enqueue(
                 GenerationResult(
                     content=delegation.get("result", "Sub-goal answered."),

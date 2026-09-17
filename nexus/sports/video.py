@@ -39,6 +39,11 @@ class VideoAnalysisService:
     """Submits footage to the football backend's EXISTING processing
     endpoint, polls until it finishes, then hands the resulting match_id to
     the Group C adapter path for a CoachReport.
+
+    No computer vision lives here, and none should. NEXUS orchestrates and
+    narrates; backend/ and ai/ do the vision. The whole point of the HTTP
+    seam is that nexus/ never imports from either — which also means the
+    football backend can run on another machine entirely.
     """
 
     def __init__(
@@ -56,7 +61,7 @@ class VideoAnalysisService:
         self._timeout_seconds = timeout_seconds
         self._poll_interval_seconds = poll_interval_seconds
         self._max_wait_seconds = max_wait_seconds
-        self._transport = transport
+        self._transport = transport  # test seam: inject httpx.MockTransport
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
@@ -64,9 +69,24 @@ class VideoAnalysisService:
         )
 
     async def submit(self, *, video_path_or_url: str, match_id: str) -> VideoJobStatus:
-        """Uploads the clip to `POST /api/videos/upload`."""
+        """Uploads the clip to `POST /api/videos/upload`.
+
+        That route is **multipart/form-data** (`file`, plus an optional
+        `metadata` JSON string) -- not the JSON body this client used to
+        send. It is also the point at which the backend CREATES the Match
+        row and assigns `match_id` (see backend/api/main.py::upload_video),
+        so the caller's `match_id` cannot be honoured on upload: whatever
+        the backend returns is authoritative. `match_id` is still accepted
+        because it is a useful correlation hint in logs when the two
+        disagree, and because `analyze()` falls back to it if the backend
+        somehow omits one.
+        """
         source = Path(video_path_or_url)
         if not source.is_file():
+            # A URL cannot be streamed straight into a multipart upload
+            # without first fetching it, and silently fetching arbitrary
+            # remote media from inside the orchestration layer is not a
+            # decision this client should make on its own.
             raise ProviderUnavailableError(
                 f"Video source is not a readable local file: {video_path_or_url!r}. "
                 "The backend's /api/videos/upload route takes a multipart file; "
@@ -247,7 +267,14 @@ class VideoAnalysisService:
 
 
 def _to_status(payload: Any, *, fallback_match_id: str) -> VideoJobStatus:
-    """Maps both real backend payloads onto one status object."""
+    """Maps both real backend payloads onto one status object.
+
+    `VideoUploadResponse` and `ProcessingStatusResponse` (backend/api/
+    schemas.py) both carry `job_id`, `match_id` and `status`; only the
+    status response carries `progress`, `message` and `error`. The field is
+    `status`, not `state` -- the old `state`-first lookup silently fell
+    through to the default on every real response.
+    """
     if not isinstance(payload, dict):
         raise ProviderUnavailableError(
             f"Football backend returned a non-object video job payload: {payload!r}"
@@ -256,6 +283,10 @@ def _to_status(payload: Any, *, fallback_match_id: str) -> VideoJobStatus:
     if state not in ("queued", "processing", "completed", "failed"):
         state = "processing"
 
+    # ProcessingStatusResponse.progress is an int PERCENT (0-100); this
+    # dataclass and its `{progress:.0%}` formatting are a 0-1 fraction.
+    # Normalise here rather than at each read site, where "97" would have
+    # been rendered as "9700%".
     raw_progress = float(payload.get("progress", 0.0) or 0.0)
     progress = raw_progress / 100.0 if raw_progress > 1.0 else raw_progress
 

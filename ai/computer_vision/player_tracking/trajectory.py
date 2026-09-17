@@ -1,13 +1,27 @@
 """
 Builds per-player trajectories from tracked detections and computes
 speed / distance / acceleration in pitch meters.
+
+Implements the formulas from docs/tracking_system_design.md §7 exactly:
+    distance     = sqrt((x2-x1)^2 + (y2-y1)^2)
+    speed        = distance / time
+    acceleration = (speed2 - speed1) / time
+
+...but computed in PITCH meters (via tactical_analysis/homography.py), not
+pixels -- pixel-space "speed" is meaningless (a player far from camera
+moves fewer pixels/frame than the same real speed up close). This is the
+concrete link between player_tracking (this module) and tactical_analysis
+(homography) that docs/database_schema.md's PlayerTracking table assumes.
+
+Per Analysis Logic Design v3 §0.2/§0.6: any frame where homography_confidence
+is below HOMOGRAPHY_CONFIDENCE_MIN is dropped from the trajectory entirely
+(pitch coordinates unusable), not imputed -- a speed computed across a
+dropped frame would silently use a bad position.
 """
 
 from __future__ import annotations
 
 import math
-import os
-import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -15,18 +29,9 @@ if TYPE_CHECKING:
     from ai.computer_vision.frame_data import CalibrationState as CalibrationLike
     from ai.computer_vision.pose_estimation.pose import OrientationResult
 
-_AI_COMPUTER_VISION_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if _AI_COMPUTER_VISION_DIR not in sys.path:
-    sys.path.insert(0, _AI_COMPUTER_VISION_DIR)
-
-_PLAYER_TRACKING_DIR = os.path.dirname(os.path.abspath(__file__))
-if _PLAYER_TRACKING_DIR not in sys.path:
-    sys.path.insert(0, _PLAYER_TRACKING_DIR)
-
-from tactical_analysis.constants import HOMOGRAPHY_CONFIDENCE_MIN
-from tactical_analysis.homography import pixel_to_pitch
-
-from tracker import TrackedDetection
+from ai.computer_vision.player_tracking.tracker import TrackedDetection
+from ai.computer_vision.tactical_analysis.constants import HOMOGRAPHY_CONFIDENCE_MIN
+from ai.computer_vision.tactical_analysis.homography import pixel_to_pitch
 
 #: Largest calibration/detection gap, in frames, that speed and distance are
 #: still integrated across. Per-frame calibration means a player's pitch
@@ -51,20 +56,20 @@ class TrackingPoint:
     pitch_x_m: float | None
     pitch_y_m: float | None
     homography_confidence: float | None
-    speed: float | None
-    distance: float | None
-    acceleration: float | None
-    body_orientation_deg: float | None = None
-    body_orientation_confidence: float | None = None
+    speed: float | None          # m/s
+    distance: float | None       # meters, delta since previous point
+    acceleration: float | None   # m/s^2
+    body_orientation_deg: float | None = None          # shoulder-line angle, 0-360; None if not sampled/not visible
+    body_orientation_confidence: float | None = None   # min shoulder-landmark visibility, 0-1
 
 
 def enrich_with_pitch_coordinates(
-    frames: list[list["TrackedDetection"]],
+    frames: list[list[TrackedDetection]],
     match_id: str,
     H,
     homography_confidence: float,
     fps: float,
-    calibration_by_frame: "dict[int, CalibrationLike] | None" = None,
+    calibration_by_frame: dict[int, CalibrationLike] | None = None,
 ) -> dict[int, list[TrackingPoint]]:
     """
     Convert tracked pixel detections into pitch-meter TrackingPoints, then
@@ -106,7 +111,9 @@ def enrich_with_pitch_coordinates(
 
         for det in detections:
             if det.class_name not in ("player", "goalkeeper"):
-                continue
+                continue  # ball/referee trajectories, if needed, go through the same
+                          # function separately -- kept out here so player speed/
+                          # distance aggregates (ACWR, sprint counts) aren't polluted
 
             px, py = det.foot_point()
 
@@ -160,12 +167,32 @@ def enrich_with_pitch_coordinates(
 
 def attach_body_orientation(
     trajectories: dict[int, list[TrackingPoint]],
-    orientation_by_player_frame: dict[tuple[int, int], "OrientationResult"],
+    orientation_by_player_frame: dict[tuple[int, int], OrientationResult],
 ) -> None:
     """
     Mutates `trajectories` in place, filling in body_orientation_deg/
     body_orientation_confidence on the TrackingPoints that have a pose
     reading.
+
+    Kept as a separate pass rather than computed inline inside
+    enrich_with_pitch_coordinates() on purpose: pose estimation
+    (ai/computer_vision/pose_estimation/pose.py) is expensive enough that
+    it's only run on a stride-sampled subset of frames (see
+    POSE_SAMPLE_STRIDE in backend/pipeline/runner.py), not every frame
+    like the pixel->pitch homography above -- mixing a sparse data source
+    into the main per-frame loop would make that loop's "is this frame
+    usable" logic harder to reason about for no benefit, since orientation
+    readings are sparse by design, not by failure.
+
+    Args:
+        trajectories: output of enrich_with_pitch_coordinates(), mutated
+            in place.
+        orientation_by_player_frame: {(player_id, frame_number): OrientationResult}
+            for whichever (player, frame) pairs were actually sampled --
+            most (player_id, frame_number) combinations in a trajectory
+            will simply have no entry here, and those TrackingPoints keep
+            their default None/None (dataclass defaults above), which is
+            the correct "not measured" state, not an error.
     """
     for player_id, points in trajectories.items():
         for point in points:
@@ -189,6 +216,6 @@ def sprint_count(trajectory: list[TrackingPoint], sprint_threshold_ms: float = 7
     Number of frames where instantaneous speed exceeds sprint_threshold_ms
     (7.0 m/s ~= 25.2 km/h is a commonly used sprint-speed threshold in
     sports-science literature). Used as `sprint_load` input for the MVP
-    Injury Risk fallback in docs/data_analysis.md §4.
+    Injury Risk fallback in docs/data analysis.md §4.
     """
     return sum(1 for p in trajectory if p.speed is not None and p.speed > sprint_threshold_ms)

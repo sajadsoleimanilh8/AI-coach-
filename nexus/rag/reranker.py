@@ -8,6 +8,8 @@ _COSINE_WEIGHT = 0.75
 _KEYWORD_WEIGHT = 0.25
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+# Light stopword list — enough to stop "the"/"is"/"of" from diluting the
+# overlap signal, not a full NLP stopword corpus (deliberately MVP-scoped).
 _STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in",
     "is", "it", "of", "on", "or", "that", "the", "this", "to", "was", "were",
@@ -26,7 +28,14 @@ def _keyword_overlap_score(query_tokens: set[str], chunk_tokens: set[str]) -> fl
 
 
 def rerank(query: str, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
-    """final_score = 0.75 * cosine_score + 0.25 * keyword_overlap_score."""
+    """final_score = 0.75 * cosine_score + 0.25 * keyword_overlap_score.
+
+    keyword_overlap_score is a normalized count of query-token / chunk-token
+    overlap (lowercased, stopword-light). Deterministic and dependency-free
+    — a real cross-encoder reranker is a documented future upgrade, not
+    required here (never use an LLM/extra model call where a heuristic
+    already does the job).
+    """
     query_tokens = _tokenize(query)
 
     reranked = [

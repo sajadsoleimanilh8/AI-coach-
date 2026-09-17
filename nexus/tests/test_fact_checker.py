@@ -204,8 +204,8 @@ async def test_run_combines_usage_from_extract_and_check() -> None:
     results, usage = await checker.run("Arsenal are based in London.", evidence)
 
     assert provider.call_count == 2
-    assert usage.prompt_tokens == 20
-    assert usage.completion_tokens == 10
+    assert usage.prompt_tokens == 20  # 10 + 10
+    assert usage.completion_tokens == 10  # 5 + 5
     assert results[0].status == CheckStatus.PASS
 
 

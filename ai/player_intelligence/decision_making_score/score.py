@@ -1,10 +1,11 @@
 """
 Decision Making Score implementation.
-Analysis Logic Design v3 (docs/data_analysis.md §9).
+Analysis Logic Design v3 (docs/data analysis.md §9).
 """
 
 from __future__ import annotations
 
+from ai.common.metrics import Confidence, MetricResult, metric_result
 from ai.computer_vision.tactical_analysis.constants import (
     DECISION_TIME_MAX_S,
     DECISION_TIME_MIN_S,
@@ -20,30 +21,40 @@ def score_decision_making(
     lost_actions: int = 0,
     avg_decision_time: float | None = None,
     team_assignment_confidence: float = 0.0,
-) -> dict:
+) -> MetricResult:
     """
-    Computes Decision Making Score per docs/data_analysis.md §9.
+    Computes Decision Making Score per docs/data analysis.md §9.
     Gated on team_assignment_confidence >= TEAM_ASSIGNMENT_CONFIDENCE_MIN
     (0.5). avg_decision_time itself is team-agnostic (it's the time
     between receiving the ball and the next possession-ending event,
+    regardless of team), but successful_actions/lost_actions (passes+shots
+    vs. turnovers) depend on the same team_id-based classification as
+    passing_vision_score -- gating the whole score on the weaker input is
+    the same choice press_resistance_score already makes with its own
+    mixed team-dependent/team-agnostic sub-scores.
+
+    Returns PlayerMetric dict.
     """
     if team_assignment_confidence < TEAM_ASSIGNMENT_CONFIDENCE_MIN:
-        return {
-            "metric_name": "decision_making_score",
-            "value": None,
-            "method": "heuristic_proxy",
-            "confidence": "low_upstream_confidence",
-            "sample_size": successful_actions + lost_actions,
-            "sub_scores": {
+        return metric_result(
+            "decision_making_score",
+            None,
+            method="heuristic_proxy",
+            confidence="low_upstream_confidence",
+            sample_size=successful_actions + lost_actions,
+            sub_scores={
                 "retention": None,
                 "decision_speed": None,
             },
-            "schema_version": SCHEMA_VERSION,
-        }
+            schema_version=SCHEMA_VERSION,
+        )
 
     retention_raw = safe_ratio(successful_actions, successful_actions + lost_actions)
     retention_score = 100.0 * retention_raw if retention_raw is not None else None
 
+    # Same scale press_resistance_score already uses for its own
+    # decision_speed sub-score: faster than DECISION_TIME_MIN_S clips to
+    # 100, slower than DECISION_TIME_MAX_S clips to 0.
     if avg_decision_time is not None:
         decision_speed_score = 100.0 * clip(
             (DECISION_TIME_MAX_S - avg_decision_time) / (DECISION_TIME_MAX_S - DECISION_TIME_MIN_S), 0.0, 1.0
@@ -61,21 +72,21 @@ def score_decision_making(
 
     if not valid or sample_size < MIN_SAMPLE_EVENTS:
         final_val = None
-        confidence_enum = "low_sample"
+        confidence_enum: Confidence = "low_sample"
     else:
         weight_sum = sum(w for _, w in valid.values())
         final_val = sum(v * w for v, w in valid.values()) / weight_sum
         confidence_enum = "normal"
 
-    return {
-        "metric_name": "decision_making_score",
-        "value": round(final_val, 1) if final_val is not None else None,
-        "method": "heuristic_proxy",
-        "confidence": confidence_enum,
-        "sample_size": sample_size,
-        "sub_scores": {
+    return metric_result(
+        "decision_making_score",
+        round(final_val, 1) if final_val is not None else None,
+        method="heuristic_proxy",
+        confidence=confidence_enum,
+        sample_size=sample_size,
+        sub_scores={
             "retention": round(retention_score, 1) if retention_score is not None else None,
             "decision_speed": round(decision_speed_score, 1) if decision_speed_score is not None else None,
         },
-        "schema_version": SCHEMA_VERSION,
-    }
+        schema_version=SCHEMA_VERSION,
+    )

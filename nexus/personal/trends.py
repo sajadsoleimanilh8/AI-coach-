@@ -7,7 +7,7 @@ from nexus.personal.dimensions import INVERTED_DIMENSIONS
 
 _SECONDS_PER_DAY = 86400.0
 _DEFAULT_MIN_SAMPLES = 4
-_DEFAULT_STABLE_EPSILON = 0.01
+_DEFAULT_STABLE_EPSILON = 0.01  # per-day slope magnitude below this reads as noise, not a trend
 
 
 @dataclass
@@ -30,7 +30,7 @@ def compute_trend(
     points — arithmetic, not a model call (principle 4). `confidence` is the
     fit's R^2: a trend line that barely explains the scatter shouldn't be
     reported with the same confidence as a clean one, even at equal
-    """
+    sample_count."""
     if len(points) < min_samples:
         return None
 
@@ -47,7 +47,7 @@ def compute_trend(
 
     ss_tot = sum((y - mean_y) ** 2 for y in ys)
     if ss_tot == 0:
-        confidence = 1.0
+        confidence = 1.0  # a perfectly flat series is a perfectly certain "stable"
     else:
         ss_res = sum((y - (intercept + slope_per_second * x)) ** 2 for x, y in zip(xs, ys))
         confidence = max(0.0, 1 - ss_res / ss_tot)

@@ -9,6 +9,14 @@ not inferred from directory names. Edges that do **not** exist are marked
 | Mark | Meaning |
 |---|---|
 | ✅ | Implemented and wired into the production path (`backend/pipeline/runner.py`) |
+
+> **Module layout (2026-09-17).** `backend/pipeline/runner.py` was 1,968 lines
+> and is now just the orchestrator: `run_pipeline()` plus the stage order. The
+> stage code moved, unchanged, into siblings — `detection.py`, `calibration.py`,
+> `trajectories.py`, `events.py`, `team_scoring.py`, `player_scoring.py`,
+> `persistence.py`, `results.py`. Older references below that read
+> `runner.py::_some_stage()` mean the function in its new module; `runner.py`
+> re-exports them, so existing imports still resolve.
 | ⚠️ | Implemented but with a stated limitation that affects correctness |
 | 🚧 | Code exists but is dormant / not reachable from the production path |
 | ❌ | **MISSING** — does not exist anywhere in the repo |
@@ -43,7 +51,7 @@ not inferred from directory names. Edges that do **not** exist are marked
 | 8 | EVENTS | ⚠️ | `possession.py` (radius heuristic), `pass_detection/pass_heuristics.py`, `shot_detection/shot_heuristics.py` |
 | 9 | TEAM INTELLIGENCE | ⚠️ | `ai/team_intelligence/{formation_stability,pressing_structure_analysis,weak_zone_detection}` |
 | 10 | PLAYER INTELLIGENCE | ✅ | 9 scorers under `ai/player_intelligence/*/score.py` |
-| 11 | SIMULATION | ❌ | `ai/simulation_ai/*` is **empty scaffolding**; `training/train_simulation.py` is a TODO stub |
+| 11 | SIMULATION | ❌ | `ai/simulation_ai/*` is **empty scaffolding**; there is no simulation trainer (the empty `train_simulation.py` stub was removed 2026-09-16) |
 | 12 | LLM COACH | ⚠️ | `nexus/sports/coach.py::CoachAssistant` + `tactical.py::derive_findings()` — **not** `ai/llm_coach/`, which is empty scaffolding |
 | 13 | API | ✅ | `backend/api/main.py`, `backend/api/player_intelligence.py`, … |
 | 14 | FRONTEND | ✅ | `frontend/web/src/` |
@@ -155,7 +163,7 @@ closed them; the still-open list is now genuinely still open._
 | Was | Closed by |
 |---|---|
 | `nexus/sports/video.py` called `POST /api/video/process` and `GET /api/video/status/{job_id}` — neither exists | Now calls `POST /api/videos/upload` (multipart) and `GET /api/processing/{job_id}`. Covered by `nexus/tests/test_sports_video.py` (7 tests) including the full upload → poll → `build_report()` path |
-| Team metrics pooled every player regardless of `team_id` | `runner.py::_score_team_intelligence()` computes each metric once per team over that team's own tracks and tags every row with `team_id` |
+| Team metrics pooled every player regardless of `team_id` | `backend/pipeline/team_scoring.py::_score_team_intelligence()` computes each metric once per team over that team's own tracks and tags every row with `team_id` |
 | `attacking_direction` a hardcoded `left_to_right` global | `tactical_analysis/attacking_direction.py`, inferred per team from tracked positions; `unknown` when unmeasurable, and consumers decline rather than default |
 | `NORMALIZATION_CONSTANT = 8.0` placeholder | Derived at import from template geometry — `formation_detection.py::_derive_normalization_constant()`, **7.89 m** |
 | `_build_players_by_frame()` keyed by list index | Keys by real `frame_id`; `_positions_by_frame()` had the same defect and was fixed with it |
@@ -165,7 +173,7 @@ closed them; the still-open list is now genuinely still open._
 
 - **"No calibration table in the database"** — contradicted §4c and §6.6.
   The `calibration_status` table exists and is written per calibration
-  episode by `runner.py::_persist_calibration_status()`.
+  episode by `backend/pipeline/calibration.py::_persist_calibration_status()`.
 - **"No automatic calibration, no temporal stability"** — contradicted §4
   and §6.3. `tactical_analysis/auto_calibration.py::AutoCalibrator` runs
   per frame with camera-motion-driven reuse and jump rejection.

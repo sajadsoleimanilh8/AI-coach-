@@ -1,4 +1,36 @@
-"""Propose train/val/test splits in which no duplicate group is ever split."""
+"""Propose train/val/test splits in which no duplicate group is ever split.
+
+WHY THIS EXISTS
+    ``scripts/dataset_dedupe.py`` removes EXACT (SHA-1) duplicates and keeps
+    one copy per digest, resolving byte-identical leakage.  It does not see
+    NEAR-duplicates: two adjacent frames from the same broadcast clip, or the
+    same source frame re-encoded at a different quality by two Roboflow
+    exports, differ in bytes and therefore survive as separate images that
+    can land in different splits.  Evaluating on those reports memorisation
+    just as surely as an exact duplicate does.
+
+    Measured on ball: 500 exact duplicate groups, 114 of them cross-split
+    under the registry-defined splits (docs/dataset_audit/ball.md).
+
+WHAT IT DOES
+    1. Hashes every image twice: SHA-1 of the bytes (exact) and a 64-bit
+       difference hash (perceptual, near-duplicate).
+    2. Unions images into groups: same SHA-1, or dHash Hamming distance
+       <= --hamming.  Grouping is transitive (connected components), because
+       "A is a near-duplicate of B and B of C" still means C must not be
+       evaluated against a model trained on A.
+    3. Assigns every GROUP -- never an image -- to exactly one split, using
+       a deterministic greedy fill against target proportions, stratified so
+       that labelled images distribute proportionally too.
+    4. Writes proposed manifests and verifies zero cross-split groups.
+
+    It NEVER writes into runs/_data (the directory the trainers read) and it
+    never touches a source image or label.  Output is a proposal under
+    datasets/derived/ for human review.
+
+Usage
+    python -m scripts.build_zero_leakage_splits ball calibration
+"""
 from __future__ import annotations
 
 import argparse
@@ -11,14 +43,36 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 from configs import registry as R  # noqa: E402
 
 MAX_PATH = 260
 
+# Filename-derived clip ids, per dataset. Roboflow exports as
+# "<original_stem>.rf.<content_hash>.<ext>", so <original_stem> survives.
+#
+#   calibration: all 317 original stems are distinct and follow
+#       "<clip>_<segment>_<frame>" -- 18 clips over 317 images. Frames of one
+#       broadcast clip must never be split; 17 of the 18 clips currently are.
+#
+#   ball: deliberately absent. Its original stems collide across the six
+#       independent exports (generic names like "-2-_jpeg" and "4_jpg" appear
+#       in all six), and 58.6% of same-stem pairs are >20 dHash bits apart --
+#       i.e. genuinely different images. Grouping ball by stem would merge
+#       unrelated photos and overstate the leakage fix.
 CLIP_PATTERNS = {"calibration": r"^([0-9a-fA-F]+)_"}
 
+# Clip-diversity policy for calibration, derived in
+# docs/dataset_audit/cv_dataset_preparation_report.md.
+#
+# The 317-image set spans 18 clips and one clip supplies 77 images (24.3% of
+# the data). Image count was never the binding constraint on generalisation --
+# independent scene count was. These thresholds exist so a future collection
+# batch that satisfies every framing bucket out of three or four new clips is
+# caught here rather than after another training run.
+#
+# `min_distinct_clips` is 42 = the 18 that exist plus the 24 new ones the
+# collection spec requires. The per-clip cap is expressed as a share so it
+# scales with the dataset instead of needing a rewrite at 509 images.
 CLIP_POLICY = {
     "calibration": {
         "min_distinct_clips": 42,
@@ -29,7 +83,16 @@ CLIP_POLICY = {
 
 
 def _targets_from_registry(records: list[dict]) -> dict:
-    """Split proportions measured from the dataset's OWN registry splits."""
+    """Split proportions measured from the dataset's OWN registry splits.
+
+    Deliberately not a fixed constant: ball currently sits near 59/27/14
+    while calibration sits near 80/11/9, and forcing one dataset's ratio
+    onto the other would quietly redesign the split while claiming only to
+    fix leakage.  This tool changes WHICH images are in each split, not how
+    big the splits are -- anything else is a separate decision for a human.
+    """
+    # Same test > valid > train priority scripts/dataset_dedupe.py uses, so
+    # the baseline is the 824/380/200 the current manifests actually contain.
     priority = {"test": 0, "valid": 1, "train": 2}
     chosen: dict[str, str] = {}
     for r in records:
@@ -48,7 +111,9 @@ def _readable(p: Path) -> str:
     return s
 
 
-
+# ----------------------------------------------------------------------
+# Hashing
+# ----------------------------------------------------------------------
 def _dhash(path: Path, size: int = 8) -> int | None:
     """64-bit difference hash: grayscale, resize to 9x8, compare adjacent
     pixels along each row. Robust to re-encoding and small compression
@@ -57,7 +122,7 @@ def _dhash(path: Path, size: int = 8) -> int | None:
         from PIL import Image
         with Image.open(path) as im:
             im = im.convert("L").resize((size + 1, size), Image.Resampling.LANCZOS)
-            px = list(im.tobytes())
+            px = list(im.tobytes())  # mode "L" -> one byte per pixel, row-major
         bits = 0
         for row in range(size):
             base = row * (size + 1)
@@ -92,7 +157,9 @@ def _inventory(name: str) -> list[dict]:
     return records
 
 
-
+# ----------------------------------------------------------------------
+# Grouping
+# ----------------------------------------------------------------------
 class _Union:
     def __init__(self, n: int):
         self.parent = list(range(n))
@@ -139,7 +206,13 @@ def _clip_stats(records: list[dict], dataset: str) -> dict:
 
 def _check_clip_policy(records: list[dict], dataset: str,
                        by_split: dict[str, list[dict]]) -> dict:
-    """Score the dataset against CLIP_POLICY and return findings."""
+    """Score the dataset against CLIP_POLICY and return findings.
+
+    Reports rather than raises by default: the existing 317 images predate
+    the policy and would fail it, and failing the audit tool on the data it
+    is meant to audit helps nobody. `--enforce-clip-policy` turns a FAIL into
+    a non-zero exit for use on a collection batch or in CI.
+    """
     policy = CLIP_POLICY.get(dataset)
     pattern = CLIP_PATTERNS.get(dataset)
     if not policy or not pattern:
@@ -188,6 +261,11 @@ def _group(records: list[dict], hamming: int, dataset: str | None = None) -> lis
         for j in idxs[1:]:
             uf.union(idxs[0], j)
 
+    # Clip grouping, where the export's filenames actually encode one.
+    # Adjacent frames of one broadcast clip are the strongest near-duplicate
+    # signal there is, and they are not always close in dHash (the camera
+    # pans). This is applied ONLY where the naming has been validated --
+    # see CLIP_PATTERNS.
     pattern = CLIP_PATTERNS.get(dataset)
     if pattern:
         clips = defaultdict(list)
@@ -200,6 +278,11 @@ def _group(records: list[dict], hamming: int, dataset: str | None = None) -> lis
                 uf.union(idxs[0], j)
 
     if hamming >= 0:
+        # Exact pairwise comparison. An earlier version bucketed by 16-bit
+        # bands to prune candidates; that is only sound for hamming <= 3
+        # (pigeonhole over four bands), and at hamming 5 it silently missed
+        # 11 cross-split pairs in ball. These datasets are ~2k images, so
+        # the O(n^2) form costs a couple of seconds and is exactly correct.
         hashes = [r["dhash"] for r in records]
         for a in range(len(hashes)):
             ha = hashes[a]
@@ -216,14 +299,25 @@ def _group(records: list[dict], hamming: int, dataset: str | None = None) -> lis
     return [sorted(v) for v in comps.values()]
 
 
-
+# ----------------------------------------------------------------------
+# Assignment
+# ----------------------------------------------------------------------
 def _assign(groups: list[list[int]], records: list[dict], targets: dict) -> dict[int, str]:
-    """Greedy deterministic fill."""
+    """Greedy deterministic fill.
+
+    Groups carrying labelled images are placed FIRST, so the scarce positives
+    (551 of 1,404 for ball) are distributed against the target proportions
+    before the unlabelled bulk is used to top each split up.  Within each
+    pass the largest group goes to whichever split is furthest below its
+    target -- placing large groups last is what strands them and forces a
+    split.  Ties break on SHA-1, so the result is reproducible without a
+    random seed.
+    """
     total = sum(len(g) for g in groups)
     total_labeled = sum(1 for r in records if r["labeled"])
     assignment: dict[int, str] = {}
-    have = {k: 0 for k in targets}
-    have_labeled = {k: 0 for k in targets}
+    have = dict.fromkeys(targets, 0)
+    have_labeled = dict.fromkeys(targets, 0)
 
     def key(g: list[int]) -> tuple:
         return (-len(g), records[g[0]]["sha1"])
@@ -253,6 +347,8 @@ def build(name: str, out_root: Path, hamming: int, targets: dict | None = None) 
     targets = targets or _targets_from_registry(records)
     groups = _group(records, hamming, dataset=name)
 
+    # Where each group's images sit under the CURRENT registry splits --
+    # this is the leakage being fixed, measured before any reassignment.
     old_cross = 0
     for g in groups:
         if len({records[i]["registry_split"] for i in g}) > 1:
@@ -268,6 +364,8 @@ def build(name: str, out_root: Path, hamming: int, targets: dict | None = None) 
     for gi, g in enumerate(sorted(groups, key=lambda g: records[g[0]]["sha1"])):
         split = assignment[id(g)]
         old_splits = sorted({records[i]["registry_split"] for i in g})
+        # One representative image per exact-duplicate digest: near-duplicates
+        # are kept (they are distinct frames), byte-identical copies are not.
         seen: set[str] = set()
         for i in g:
             r = records[i]
@@ -303,6 +401,7 @@ def build(name: str, out_root: Path, hamming: int, targets: dict | None = None) 
         w.writeheader()
         w.writerows(group_rows)
 
+    # Verification: recompute cross-split groups against the NEW assignment.
     where: dict[str, set[str]] = defaultdict(set)
     for split in ("train", "val", "test"):
         for line in (out_dir / f"{split}.txt").read_text(encoding="utf-8").splitlines():

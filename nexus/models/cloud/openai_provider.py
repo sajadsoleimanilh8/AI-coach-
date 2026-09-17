@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -38,7 +39,7 @@ class OpenAIProvider(AIProvider):
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
-        self._transport = transport
+        self._transport = transport  # test seam: inject httpx.MockTransport
 
     def _require_api_key(self) -> str:
         if not self._api_key:
@@ -112,6 +113,8 @@ class OpenAIProvider(AIProvider):
         choice = data["choices"][0]
         usage = data.get("usage", {})
         return GenerationResult(
+            # content is null (not "") when the model responds with only
+            # tool_calls, so this must fall back explicitly.
             content=choice["message"].get("content") or "",
             model_used=data.get("model", model_id),
             provider_name=self.name,
@@ -134,6 +137,11 @@ class OpenAIProvider(AIProvider):
         max_tokens: int | None = None,
         tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[GenerationChunk]:
+        # Phase 5 scope boundary: chat.py's tool-calling loop only ever
+        # calls non-streaming generate() (see chat.py's docstring on why),
+        # so streamed tool_call deltas are accepted here for API
+        # completeness but not accumulated — GenerationChunk has no
+        # tool_calls field to carry them, only plain content deltas.
         api_key = self._require_api_key()
         self._check_context_window(messages, model_id)
         payload: dict[str, Any] = {
@@ -190,6 +198,8 @@ class OpenAIProvider(AIProvider):
                 encoding = tiktoken.get_encoding("cl100k_base")
             return len(encoding.encode(text))
         except ImportError:
+            # tiktoken is an optional dependency; fall back to the same
+            # chars-per-token heuristic OllamaRuntime uses if it's absent.
             return max(1, len(text) // 4)
 
 

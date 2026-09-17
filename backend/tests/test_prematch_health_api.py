@@ -1,18 +1,21 @@
 """
 API tests for the Pre-Match Health Intelligence router
 (backend/api/prematch_health.py).
+
+Runs the real FastAPI app against a throwaway SQLite file: DATABASE_URL is
+pointed at a temp path BEFORE backend.database.session is first imported, so
+the app's own startup Base.metadata.create_all() builds the schema there and
+the developer's sports_strategy.db is never touched. That also means these
+tests exercise the real table definitions, not a hand-built test schema --
+if a column or FK is wrong in models.py, it fails here.
 """
 
 import os
-import sys
 import tempfile
 
 import pytest
 
-repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-if repo_root not in sys.path:
-    sys.path.insert(0, repo_root)
-
+# Must happen before any backend.database import binds the engine.
 _TEST_DB_DIR = tempfile.mkdtemp(prefix="prematch_health_tests_")
 _TEST_DB_PATH = os.path.join(_TEST_DB_DIR, "test_prematch_health.db")
 os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB_PATH}"
@@ -32,7 +35,7 @@ from backend.database.session import Base, SessionLocal, engine  # noqa: E402
 
 @pytest.fixture(scope="module")
 def client():
-    with TestClient(app) as test_client:
+    with TestClient(app) as test_client:  # triggers the startup create_all
         yield test_client
 
 
@@ -101,8 +104,9 @@ def submit(client, player_id: str, payload: dict | None = None):
     )
 
 
-
-
+# ---------------------------------------------------------------------------
+# Submit
+# ---------------------------------------------------------------------------
 def test_submit_returns_201_and_a_full_assessment(client):
     response = submit(client, "p123")
     assert response.status_code == 201, response.text
@@ -135,6 +139,7 @@ def test_submit_persists_both_rows_matching_what_was_submitted(client):
         questionnaire = session.get(PreMatchQuestionnaire, body["questionnaire_id"])
         assessment = session.get(PreMatchHealthAssessment, body["assessment_id"])
 
+        # The raw answers are stored exactly as submitted.
         assert questionnaire is not None
         assert questionnaire.player_id == "p-persist"
         answers = questionnaire.questionnaire_json
@@ -143,6 +148,7 @@ def test_submit_persists_both_rows_matching_what_was_submitted(client):
         assert answers["high_intensity_activity"] is True
         assert answers["bedtime"] == "22:30"
 
+        # The computed row matches the response exactly.
         assert assessment is not None
         assert assessment.questionnaire_id == questionnaire.id
         assert assessment.physical_readiness == body["physical_readiness"]
@@ -153,9 +159,11 @@ def test_submit_persists_both_rows_matching_what_was_submitted(client):
         assert assessment.method == MetricMethod.heuristic_proxy
         assert assessment.schema_version == "v1"
 
+        # The 1:1 relationship resolves in both directions.
         assert questionnaire.assessment.id == assessment.id
         assert assessment.questionnaire.id == questionnaire.id
 
+        # The explainability record survived the round trip.
         assert {f["dimension"] for f in assessment.factors} >= {
             "sleep",
             "recent_training_load",
@@ -213,8 +221,9 @@ def test_identical_submissions_produce_identical_scores(client):
         assert first[field] == second[field]
 
 
-
-
+# ---------------------------------------------------------------------------
+# match_id linkage
+# ---------------------------------------------------------------------------
 def test_submit_links_to_an_existing_match(client):
     session = SessionLocal()
     try:
@@ -247,8 +256,9 @@ def test_submit_rejects_an_unknown_match_id(client):
     assert "Match not found" in response.json()["detail"]
 
 
-
-
+# ---------------------------------------------------------------------------
+# Validation -- 422, never a silent clamp
+# ---------------------------------------------------------------------------
 SCALE_FIELDS = [
     "sleep_quality",
     "training_intensity",
@@ -321,8 +331,9 @@ def test_boundary_values_are_accepted(client):
     assert submit(client, "p-boundary", payload).status_code == 201
 
 
-
-
+# ---------------------------------------------------------------------------
+# latest / history / features / assessment
+# ---------------------------------------------------------------------------
 def test_latest_404s_before_any_submission(client):
     response = client.get("/api/prematch_health/nobody/latest")
     assert response.status_code == 404
@@ -353,6 +364,9 @@ def test_history_returns_every_submission_newest_first(client):
     history = client.get("/api/prematch_health/p-hist/history").json()
     assert len(history) == 3
     assert history[0]["assessment_id"] == third["assessment_id"]
+    # Ordered by the explicit submission counter, not by computed_at -- the
+    # OS clock is too coarse to separate submissions made this close together
+    # (all three of these can share one timestamp).
     assert [h["submission_index"] for h in history] == [3, 2, 1]
 
 
@@ -416,7 +430,9 @@ def test_features_endpoint_serves_the_normalized_vector(client):
     ):
         assert name in features
 
+    # Provenance is not a model input.
     assert "data_source" not in features
+    # Every scored feature declares which way it points.
     assert body["feature_directions"]["hydration_score"] == "higher_is_better"
     assert body["feature_directions"]["muscle_soreness"] == "higher_is_worse"
     assert body["method"] == "heuristic_proxy"
@@ -429,6 +445,7 @@ def test_assessment_endpoint_returns_the_full_structured_output(client):
         f"/api/prematch_health/p-assessment/{submitted['assessment_id']}/assessment"
     ).json()
 
+    # The Section 7 contract, in full.
     for field in (
         "player_id",
         "match_id",
@@ -470,7 +487,8 @@ def test_assessment_is_not_readable_under_another_players_path(client):
     assert response.status_code == 404
 
 
-
-
+# ---------------------------------------------------------------------------
+# Nothing existing regressed
+# ---------------------------------------------------------------------------
 def test_existing_health_endpoint_still_works(client):
     assert client.get("/health").json()["status"] == "ok"

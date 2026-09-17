@@ -18,7 +18,7 @@ def test_high_band_appends_a_single_short_line() -> None:
 
     assert result.startswith("The answer.")
     added = result[len("The answer."):]
-    assert added.count("\n") <= 3
+    assert added.count("\n") <= 3  # short footer, not a wall of text
     assert "High confidence" in added
 
 

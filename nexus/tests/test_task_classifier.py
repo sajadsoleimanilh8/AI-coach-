@@ -84,6 +84,7 @@ def test_ambiguous_short_query_falls_back_to_general() -> None:
 
 def test_long_context_token_threshold_overrides_keyword_match() -> None:
     classifier = TaskClassifier(long_context_token_threshold=50)
+    # Contains a strong CODING signal, but the sheer length must still win.
     query = "please refactor this function and fix the bug " + ("padding word " * 60)
 
     result = classifier.classify(query)
@@ -105,9 +106,11 @@ def test_long_context_threshold_considers_extra_char_count() -> None:
 
 
 def test_min_confidence_forces_general_fallback() -> None:
+    # "solve"/"equation" match MATH for confidence 0.6; requiring 0.9 should
+    # push it back to GENERAL even though real keywords did match.
     classifier = TaskClassifier(min_confidence=0.9)
     result = classifier.classify("Can you help me solve this equation?")
 
     assert result.task_type == TaskType.GENERAL
-    assert result.matched_signals
+    assert result.matched_signals  # the near-miss is preserved for the reason
     assert "defaulting to GENERAL" in result.reason

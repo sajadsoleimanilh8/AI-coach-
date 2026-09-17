@@ -6,10 +6,8 @@ import StreamingBackdrop from './components/ambient/StreamingBackdrop.jsx';
 import './styles/dashboard.css';
 import './styles/ambient.css';
 
-                                                                                                                                                                                                                                                                                                                                                                                                                                         
 const container = document.getElementById('dashboard-root');
 
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
 const ambient = document.getElementById('ambient-root');
 if (ambient) {
   createRoot(ambient).render(
@@ -26,9 +24,6 @@ if (container) {
     </StrictMode>,
   );
 } else {
-                                                                        
-                                                                           
-                                                       
   console.error(
     '[SportsStrategyCoachAI] #dashboard-root not found in index.html — the dashboard cannot mount.',
   );

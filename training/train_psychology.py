@@ -1,5 +1,58 @@
 """
 Training entry point for the psychology mental-readiness model.
+
+    THERE IS NOTHING TO TRAIN YET, AND THIS SCRIPT TRAINS NOTHING.
+
+That is the honest state of this module, not an oversight, and this file exists
+to say so precisely rather than to leave a bare `# TODO` that reads as "someone
+forgot".
+
+WHY THERE IS NO MODEL
+---------------------
+Supervised training needs labelled examples: an input and the outcome it should
+have predicted. For mental readiness the input exists -- the 13-item
+questionnaire, normalized by ai/psychology_ai/feature_extraction.py into a
+bounded 0-100 vector, and persisted on every psychology_assessments row exactly
+so it would be available for this. The LABEL does not exist. Nothing in this
+repo records what happened afterwards: no match-day performance rating, no
+minutes played, no coach assessment, nothing that could stand as "was this
+player actually mentally ready?".
+
+Without labels there is no supervised target, no train/validation split worth
+the name, and no metric that would mean anything. Fabricating one -- training
+against the heuristic's own output -- would produce a model that reproduces the
+heuristic's biases while LOOKING like independent evidence for them. That is
+strictly worse than the disclosed heuristic, which at least says plainly what
+it is (`method="heuristic_proxy"` on every row it writes).
+
+So ai/psychology_ai/model_interface.py::HeuristicReadinessModel is the real,
+disclosed implementation today, and PsychologyReadinessModel is the interface a
+trained model implements once the data below exists.
+
+WHAT WOULD MAKE THIS SCRIPT REAL
+--------------------------------
+1. An outcome label per assessment. Realistically a post-match performance
+   rating (coach 1-10, or a derived composite of the PlayerMetric scores for
+   that player in that match), joined to the assessment via a resolved player
+   identity -- NOT via cv_player_id, which is a per-video ByteTrack tracking ID
+   and cannot be followed across matches (see backend/api/player_intelligence.py).
+   Resolving that identity is its own unbuilt piece of work; backend/auth/ is
+   empty scaffolding today.
+2. Enough labelled rows for the split to be meaningful. With 10 features, a few
+   hundred assessments is the floor at which a model could beat the heuristic
+   for reasons other than chance.
+3. A baseline comparison. A trained model only earns the `ml_trained` tier if
+   it beats HeuristicReadinessModel on held-out data. If it does not, the
+   heuristic stays and this script reports that.
+
+The CLI and the loader below are written out so that step is a matter of
+implementing `load_dataset` against a real label source rather than designing
+the whole pipeline from scratch. Every path that would otherwise invent data
+raises or exits non-zero instead.
+
+Usage:
+    python training/train_psychology.py --check
+    python training/train_psychology.py --dataset path/to/labelled.jsonl
 """
 
 from __future__ import annotations
@@ -10,13 +63,10 @@ import os
 import sys
 from dataclasses import dataclass
 
-repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if repo_root not in sys.path:
-    sys.path.insert(0, repo_root)
-
 from ai.psychology_ai.constants import SCHEMA_VERSION  # noqa: E402
 from ai.psychology_ai.feature_extraction import FEATURE_NAMES  # noqa: E402
 
+# The label this script would train against, and the reason it cannot yet.
 REQUIRED_LABEL = "post_match_performance_rating"
 
 NO_DATASET_MESSAGE = (
@@ -33,7 +83,12 @@ NO_DATASET_MESSAGE = (
 
 @dataclass(frozen=True)
 class LabelledExample:
-    """One training row: the stored feature vector plus its outcome label."""
+    """One training row: the stored feature vector plus its outcome label.
+
+    Deliberately typed even though nothing constructs it yet -- it is the
+    contract `load_dataset` has to satisfy, and writing it down is most of the
+    remaining design work.
+    """
 
     features: dict[str, float]
     label: float
@@ -43,7 +98,17 @@ class LabelledExample:
 
 
 def load_dataset(path: str | None) -> list[LabelledExample]:
-    """Loads labelled examples from a JSONL file."""
+    """Loads labelled examples from a JSONL file.
+
+    Returns an empty list when `path` is None -- the current, expected state.
+    It never synthesizes rows, and it never falls back to scoring unlabelled
+    assessments with the heuristic and calling those labels.
+
+    Raises FileNotFoundError if a path is given and does not exist, and
+    ValueError if a row is missing features or the outcome label. Loudly
+    refusing malformed input is the point: a silently-skipped row is a silently
+    biased dataset.
+    """
     if path is None:
         return []
 
@@ -51,7 +116,7 @@ def load_dataset(path: str | None) -> list[LabelledExample]:
         raise FileNotFoundError(f"Dataset not found: {path}")
 
     examples: list[LabelledExample] = []
-    with open(path, "r", encoding="utf-8") as handle:
+    with open(path, encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
             line = line.strip()
             if not line:
@@ -76,6 +141,9 @@ def load_dataset(path: str | None) -> list[LabelledExample]:
 
             row_schema = row.get("schema_version", SCHEMA_VERSION)
             if row_schema != SCHEMA_VERSION:
+                # Features computed under different constants are not
+                # comparable -- the same reason assessments carry a
+                # schema_version at all.
                 raise ValueError(
                     f"{path}:{line_number}: schema_version {row_schema!r} does not "
                     f"match the current engine ({SCHEMA_VERSION!r}). Re-extract "
@@ -98,6 +166,11 @@ def load_dataset(path: str | None) -> list[LabelledExample]:
 def train(examples: list[LabelledExample]) -> int:
     """The training step. Not implemented, because nothing can call it with a
     non-empty dataset yet.
+
+    Returns a process exit code. When a real dataset does arrive, this is where
+    a model implementing PsychologyReadinessModel gets fitted, compared against
+    HeuristicReadinessModel on a held-out split, and only promoted to
+    `method="ml_trained"` if it wins.
     """
     if not examples:
         print(NO_DATASET_MESSAGE, file=sys.stderr)

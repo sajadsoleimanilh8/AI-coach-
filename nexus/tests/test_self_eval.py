@@ -161,7 +161,7 @@ async def test_findings_are_added_as_additive_notes() -> None:
 
     annotated = evaluator.annotate_report(_report(), self_eval)
 
-    assert "existing note" in annotated.uncertainty_notes
+    assert "existing note" in annotated.uncertainty_notes  # original notes preserved
     assert any("did not directly address" in n for n in annotated.uncertainty_notes)
     assert any("no numbers given" in n for n in annotated.uncertainty_notes)
 

@@ -1,18 +1,57 @@
-"""Coverage and leakage audit for the registered 32-keypoint calibration set."""
+"""Coverage and leakage audit for the registered 32-keypoint calibration set.
+
+The source export does not carry explicit venue/end/camera metadata.  This
+script therefore reports measurable proxies (source stem tokens, visible
+landmark subsets, image dimensions, and SHA-1 duplicate groups) and marks
+camera/end/venue as ``human_metadata_required`` rather than inventing labels.
+It also emits a quantified collection specification from the observed 317
+images and the existing real-world validation result.
+"""
 from __future__ import annotations
 
-import argparse, csv, hashlib, json, re, sys
+import argparse
+import csv
+import hashlib
+import json
+import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path: sys.path.insert(0, str(REPO_ROOT))
 from configs import registry as R  # noqa: E402
 
 
 def _sha1(p: Path) -> str: return hashlib.sha1(p.read_bytes()).hexdigest()
 
 
+# Revised 2026-08-13. The previous eight-bucket plan split every bucket by
+# pitch end and gave 24 images to each. `scripts/audit_calibration_landmark_
+# coverage.py` shows that end coverage is ALREADY balanced (left end in frame
+# in 187 of 317 images, right end in 188), so splitting by end buys nothing
+# on a dimension that is not the deficit. The measured deficit is the NEAR
+# touchline: at matched pitch positions the far corner is visible 5.96x more
+# often than the near corner on the left (161 vs 27) and 14.18x more on the
+# right (156 vs 11), while at the halfway line near/far is nearly even
+# (285 vs 234, 1.22x). Index 29 is visible in only 5.9% of the images where
+# its own end is already in frame -- it is a camera-geometry deficit, not an
+# end-coverage deficit, so more of the same framings cannot fix it.
+#
+# Two dedicated low-camera buckets were also dropped: a lower camera sees
+# LESS of the near touchline, so they worked directly against the landmark
+# the collection is meant to recover. Camera-height variation is retained
+# inside the diversity bucket instead.
+#
+# Total stays at 192 (509 after collection) so the GPU-hour estimate and the
+# existing plan remain comparable; only the allocation changes.
+#
+# CLIP DIVERSITY (added 2026-08-13, second revision). The first revision
+# specified framing but not scene count, which left the plan satisfiable out
+# of three or four new broadcasts -- reproducing the 18-clip effective-
+# diversity problem under new bucket labels. Per-clip measurement also
+# retired one bucket: `end_asymmetric_alternating` asked for 32 images of a
+# framing the set already holds 167 of, spread across all 18 clips. More of
+# it was never the missing thing; those 32 images are reallocated to the two
+# deficits that are real. See the report for the full derivation.
 _COLLECTION_SPEC = {
     "revision": "2026-08-13 rev2; landmark deficit + clip diversity",
     "new_images_total": 192,
@@ -88,6 +127,8 @@ def _row(src: Path, split: str, image: Path) -> dict:
     lab = src / split / "labels" / f"{image.stem}.txt"
     vals = lab.read_text(encoding="utf-8").split() if lab.exists() else []
     visible = [i for i in range(32) if len(vals) >= 5 + 32 * 3 and int(float(vals[5 + 3 * i + 2])) == 2]
+    # Names often encode source clip/frame tokens; preserve them as evidence,
+    # never as a claimed venue or pitch-end class.
     tokens = re.findall(r"[A-Za-z]+|\d+", image.stem)
     try:
         from PIL import Image

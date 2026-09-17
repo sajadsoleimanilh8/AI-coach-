@@ -1,5 +1,11 @@
 """The tracking overlay payload must state whether its pitch coordinates
 are trustworthy.
+
+Before Phase 3 this endpoint returned `pitch_x_m`/`pitch_y_m` per player and
+nothing about calibration, so a consumer could not distinguish "projected
+under a homography that passed the gate" from "None because calibration
+failed". On current broadcast footage every one of them is None, and the
+frontend rendered that as an ordinary empty overlay.
 """
 from __future__ import annotations
 
@@ -63,6 +69,7 @@ def test_invalid_calibration_is_reported_not_silently_empty(db):
     assert cal["valid_in_window"] is False
     assert cal["valid_frame_ranges"] == []
     assert cal["tracking_rows_in_window"] == 5
+    # The point of the field: 5 rows exist, 0 of them are positioned.
     assert cal["rows_with_pitch_coordinates"] == 0
     assert "never imputed" in cal["note"]
 

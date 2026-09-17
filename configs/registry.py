@@ -1,5 +1,40 @@
 """
 Single source of truth for dataset and model checkpoint locations.
+
+WHAT THIS REPLACES
+    Before this module, dataset and model paths were scattered as absolute
+    Windows literals across the training/eval scripts --
+    "ai/computer_vision/player detection/"'s merge.py (lines 6-9, 13),
+    remap.py (line 9), test.py (lines 14-15), test_yolo.py (lines 35, 39)
+    and extract_clip.py (line 24) each baked in D:\\SportsStrategyCoachAI\\...
+    -- while inference read a single $YOLO_MODEL_PATH env var that pointed
+    at one combined 4-class checkpoint. None of it was portable and none of
+    it agreed with anything else.
+
+    Everything now resolves through configs/datasets.yaml + configs/models.yaml
+    via this module.
+
+DESIGN RULES (do not weaken these)
+    1. Resolution failure is LOUD. A missing dataset directory, a missing
+       split, or a missing checkpoint raises with the exact resolved path
+       that was tried. There is no silent fallback -- in particular a
+       missing trained checkpoint must never degrade to a stock COCO
+       checkpoint, which is what docker-compose.gpu.yml's
+       `yolov8s.pt` placeholder did: it produced confident, meaningless
+       detections that looked like the pipeline was working.
+    2. verify_dataset() runs as a pre-flight in every trainer, BEFORE
+       ultralytics is even imported, so a bad dataset fails in seconds with
+       a readable message instead of thirty seconds into epoch 1.
+    3. Resolved data.yaml files are GENERATED, never hand-edited. Every
+       data.yaml shipped inside the dataset directories declares its splits
+       as "../train/images", which resolves one level too high and does not
+       exist (verified for all 11 dataset dirs). We never point ultralytics
+       at those files; build_data_yaml() writes a corrected one with
+       absolute paths.
+    4. Multi-source datasets (ball has 6 source dirs, player has 2) are
+       combined by listing every split directory in the generated
+       data.yaml, which ultralytics accepts natively. Files are NOT copied
+       -- the old merge.py duplicated every image on disk to achieve this.
 """
 
 from __future__ import annotations
@@ -11,6 +46,7 @@ from typing import Any
 
 import yaml
 
+# configs/registry.py -> configs/ -> repo root
 CONFIG_DIR = Path(__file__).resolve().parent
 REPO_ROOT = CONFIG_DIR.parent
 
@@ -38,6 +74,9 @@ class CheckpointNotFoundError(RegistryError):
     pass
 
 
+# ----------------------------------------------------------------------
+# Raw config loading
+# ----------------------------------------------------------------------
 
 _cache: dict[str, Any] = {}
 
@@ -47,7 +86,7 @@ def _load(path: Path) -> dict:
     if key not in _cache:
         if not path.exists():
             raise RegistryError(f"Registry config missing: {path}")
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             _cache[key] = yaml.safe_load(fh) or {}
     return _cache[key]
 
@@ -60,6 +99,9 @@ def models_config() -> dict:
     return _load(MODELS_YAML)
 
 
+# ----------------------------------------------------------------------
+# Root resolution
+# ----------------------------------------------------------------------
 
 def dataset_root() -> Path:
     """
@@ -67,6 +109,10 @@ def dataset_root() -> Path:
         1. $SSC_DATASET_ROOT
         2. $DATASET_ROOT
         3. datasets.yaml::root_default_windows   (on Windows)
+        4. datasets.yaml::root_default_posix     (elsewhere)
+
+    Does NOT check existence -- verify_dataset() does that, so the error
+    can name the specific dataset that failed rather than the root alone.
     """
     cfg = datasets_config()
     for env in ("SSC_DATASET_ROOT", "DATASET_ROOT"):
@@ -84,7 +130,12 @@ def dataset_root() -> Path:
 
 
 def external_root() -> Path:
-    """Root for raw third-party downloads (SoccerNet et al)."""
+    """Root for raw third-party downloads (SoccerNet et al).
+
+    $SSC_EXTERNAL_ROOT overrides; the default is the `external` sibling of
+    the processed/ root, which is where the existing Roboflow exports were
+    already unpacked.
+    """
     val = os.getenv("SSC_EXTERNAL_ROOT")
     if val:
         return Path(val).expanduser()
@@ -96,7 +147,12 @@ def external_sources_config() -> dict:
 
 
 def external_source(name: str) -> dict:
-    """Spec for one raw external download."""
+    """Spec for one raw external download.
+
+    Kept separate from dataset_spec() on purpose: these have not been
+    converted to the images/ + labels/ contract, so they must not appear to
+    anything that iterates the trainable datasets.
+    """
     sources = external_sources_config()
     if name not in sources:
         raise RegistryError(
@@ -130,6 +186,9 @@ def runs_root() -> Path:
     return REPO_ROOT / models_config().get("runs_root_default", "runs/train")
 
 
+# ----------------------------------------------------------------------
+# Dataset verification
+# ----------------------------------------------------------------------
 
 @dataclass
 class SplitReport:
@@ -179,6 +238,21 @@ def dataset_source_dirs(name: str) -> list[Path]:
 def verify_dataset(name: str, *, strict: bool = True) -> DatasetReport:
     """
     Pre-flight structural check for one registered dataset.
+
+    Verifies, per source directory, that every required split exists, that
+    it contains images/ and labels/ subdirectories, and that neither is
+    empty. Prints/records the EXACT resolved absolute path being used, so a
+    wrong $SSC_DATASET_ROOT is obvious rather than mysterious.
+
+    Deliberately does NOT inspect label CONTENT -- that is the dataset QA
+    pass (scripts/dataset_qa.py), which is slower and produces a full
+    report. This is the fast gate every trainer runs first.
+
+    Args:
+        name: dataset key from datasets.yaml.
+        strict: raise DatasetStructureError on any problem. Set False to
+            get the report back for inspection (used by the QA script,
+            which wants to report all datasets, not die on the first).
     """
     spec = dataset_spec(name)
     root = dataset_root()
@@ -251,11 +325,30 @@ def format_dataset_report(report: DatasetReport) -> str:
     return "\n".join(lines)
 
 
+# ----------------------------------------------------------------------
+# Generated data.yaml
+# ----------------------------------------------------------------------
 
 def build_data_yaml(name: str, out_dir: Path | None = None,
                     dedupe: bool = True, refresh: bool = False) -> Path:
     """
     Writes a resolved, absolute-path data.yaml for `name` and returns it.
+
+    This exists because every data.yaml shipped in the dataset directories
+    declares its splits relative as "../train/images", which resolves one
+    directory too high and does not exist. Rather than editing 11 vendored
+    files in place (they get overwritten on any dataset re-export), we
+    generate a correct one at train time.
+
+    For multi-source datasets the split value is a LIST of absolute
+    directories -- ultralytics resolves each independently, so the 6 ball
+    sets and 2 player sets train together with no file copying.
+
+    Pose datasets additionally carry kpt_shape and flip_idx. flip_idx is
+    load-bearing: without it, fliplr augmentation mirrors the image but not
+    the left/right-symmetric landmark identities, which silently trains the
+    model to emit mirrored keypoints and corrupts every homography derived
+    from them.
     """
     spec = dataset_spec(name)
     sources = dataset_source_dirs(name)
@@ -267,6 +360,12 @@ def build_data_yaml(name: str, out_dir: Path | None = None,
         return paths[0] if len(paths) == 1 else paths
 
     if dedupe:
+        # Deduplicated manifests. Required for correctness on any dataset
+        # assembled from multiple exports: the 6 ball source dirs each did
+        # their own train/valid/test split, putting byte-identical images
+        # in train AND test (114 such images -- see
+        # docs/dataset_audit/ball.md). Training on the raw directories and
+        # reporting the resulting mAP would report memorisation.
         from scripts.dataset_dedupe import build_manifests
 
         manifest_dir = out_dir / name
@@ -306,6 +405,9 @@ def build_data_yaml(name: str, out_dir: Path | None = None,
     return out_path
 
 
+# ----------------------------------------------------------------------
+# Models
+# ----------------------------------------------------------------------
 
 @dataclass
 class ModelSpec:
@@ -322,7 +424,11 @@ class ModelSpec:
     raw: dict
 
     def require_checkpoint(self) -> Path:
-        """Returns the checkpoint path, raising if it is not on disk."""
+        """Returns the checkpoint path, raising if it is not on disk.
+
+        Inference call sites use this instead of testing os.path.exists
+        themselves so the error message is consistent and names the
+        trainer that produces the file."""
         if not self.checkpoint.exists():
             raise CheckpointNotFoundError(
                 f"Trained '{self.name}' checkpoint not found at:\n"
@@ -349,6 +455,8 @@ def get_model(name: str) -> ModelSpec:
     defaults = dict(cfg.get("defaults", {}))
 
     train = {**defaults, **(m.get("train") or {})}
+    # Environment overrides for the two knobs that legitimately change per
+    # machine. Everything else belongs in models.yaml, not in an env var.
     if os.getenv("SSC_DEVICE"):
         train["device"] = os.getenv("SSC_DEVICE")
     if os.getenv("SSC_BATCH"):
@@ -385,6 +493,11 @@ def env_overrides() -> dict[str, str]:
     """
     The per-model checkpoint paths as environment variables, for Docker and
     .env generation: SSC_MODEL_PLAYER, SSC_MODEL_BALL, ...
+
+    Used by scripts/print_model_env.py so docker-compose and .env.example
+    stay in sync with this registry instead of drifting from it (the old
+    setup hardcoded a single YOLO_MODEL_PATH pointing at a stock
+    checkpoint).
     """
     return {
         f"SSC_MODEL_{n.upper()}": str(get_model(n).checkpoint)

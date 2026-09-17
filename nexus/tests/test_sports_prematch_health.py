@@ -1,5 +1,17 @@
 """
 Tests for the pre-match readiness integration in nexus/sports/.
+
+Two things are being protected here:
+  1. PreMatchHealthClient preserves the football backend's own distinctions
+     -- "not submitted yet" (404 -> None) must never be confused with
+     "backend is down" (connection error / 5xx -> ProviderUnavailableError).
+  2. CoachAssistant.build_prematch_report narrates and never calculates: the
+     numbers on the returned report are byte-identical to what the backend
+     supplied, and the LLM is told in its system prompt that it may not
+     recompute them.
+
+Uses httpx.MockTransport against the client, the same seam
+test_sports_adapter.py uses, so no real backend is needed.
 """
 
 from __future__ import annotations
@@ -61,6 +73,9 @@ def _client(**kwargs) -> PreMatchHealthClient:
     )
 
 
+# ---------------------------------------------------------------------------
+# Client
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -83,6 +98,7 @@ async def test_get_latest_maps_the_backend_contract_verbatim() -> None:
     assert assessment.method == "heuristic_proxy"
     assert assessment.schema_version == "v1"
     assert assessment.data_source == "self_reported"
+    # The untouched payload is kept so nothing is lost in translation.
     assert assessment.raw == _ASSESSMENT
 
 
@@ -142,6 +158,9 @@ def test_prompt_context_states_when_no_match_is_linked() -> None:
     assert "not linked to a match yet" in context
 
 
+# ---------------------------------------------------------------------------
+# CoachAssistant -- narrate only
+# ---------------------------------------------------------------------------
 
 
 class _FakeProvider(AIProvider):
@@ -214,6 +233,7 @@ async def test_report_carries_the_backend_numbers_through_unchanged() -> None:
     assert report.assessment.recovery_score == 81.0
     assert report.assessment.performance_risk == "low"
     assert report.assessment.workload_risk == "moderate"
+    # The narrative is the ONLY model-generated field.
     assert report.narrative == "Fit to start; manage minutes given the recent load."
     assert report.model_used == "fake-model"
 
@@ -246,7 +266,7 @@ async def test_llm_receives_the_computed_values_as_context() -> None:
 async def test_exactly_one_llm_call_is_made() -> None:
     provider = _FakeProvider()
     await _coach(provider).build_prematch_report("p123", "m456")
-    assert len(provider.received_messages) == 2
+    assert len(provider.received_messages) == 2  # one system + one user, single call
 
 
 @pytest.mark.asyncio
@@ -254,6 +274,7 @@ async def test_no_assessment_yet_returns_none_rather_than_a_blank_report() -> No
     provider = _FakeProvider()
     report = await _coach(provider, status=404).build_prematch_report("nobody", "m456")
     assert report is None
+    # No LLM call is made when there is nothing to narrate.
     assert provider.received_messages is None
 
 

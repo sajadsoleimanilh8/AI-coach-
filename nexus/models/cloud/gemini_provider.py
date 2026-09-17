@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -22,6 +23,10 @@ logger = get_logger("models.cloud.gemini")
 
 _DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
+# Gemini ships no lightweight offline tokenizer, and its countTokens endpoint
+# is a separate network round trip on a hot path — one extra call per request
+# just to estimate. Same ~4 chars/token heuristic AnthropicProvider uses; real
+# numbers always come back on the response in usageMetadata.
 _CHARS_PER_TOKEN_ESTIMATE = 4
 
 
@@ -41,7 +46,7 @@ class GeminiProvider(AIProvider):
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
-        self._transport = transport
+        self._transport = transport  # test seam: inject httpx.MockTransport
 
     def _require_api_key(self) -> str:
         if not self._api_key:
@@ -53,6 +58,8 @@ class GeminiProvider(AIProvider):
             base_url=self._base_url,
             timeout=self._timeout_seconds,
             transport=self._transport,
+            # Gemini also accepts ?key=, but a query string ends up in proxy
+            # logs, crash dumps and error text; a header does not.
             headers={"x-goog-api-key": api_key, "content-type": "application/json"},
         )
 
@@ -61,10 +68,15 @@ class GeminiProvider(AIProvider):
         """Splits NEXUS messages into Gemini's systemInstruction + contents."""
         system_parts = [m.content for m in messages if m.role == "system"]
         contents = [
+            # Gemini names the assistant turn "model"; every other provider in
+            # NEXUS (and NEXUS's own Message.role) calls it "assistant". The
+            # rename has to happen here so nothing outside this adapter knows.
             {"role": "model" if m.role == "assistant" else "user", "parts": [{"text": m.content}]}
             for m in messages
             if m.role in ("user", "assistant")
         ]
+        # systemInstruction is a single Content, not a list, so multiple system
+        # messages have to be flattened into one.
         system_instruction = (
             {"parts": [{"text": "\n".join(system_parts)}]} if system_parts else None
         )
@@ -166,6 +178,11 @@ class GeminiProvider(AIProvider):
         max_tokens: int | None = None,
         tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[GenerationChunk]:
+        # Phase 5 scope boundary, same as the OpenAI/Anthropic adapters:
+        # chat.py's tool-calling loop only ever calls non-streaming
+        # generate(), so streamed functionCall parts are accepted here for
+        # API completeness but not accumulated — GenerationChunk carries
+        # only text deltas.
         api_key = self._require_api_key()
         self._check_context_window(messages, model_id)
         payload = self._build_payload(
@@ -173,20 +190,21 @@ class GeminiProvider(AIProvider):
         )
 
         try:
-            async with self._client(api_key) as client:
-                async with client.stream(
-                    "POST",
-                    f"/models/{model_id}:streamGenerateContent",
-                    params={"alt": "sse"},
-                    json=payload,
-                ) as response:
-                    self._raise_for_status(response.status_code, model_id)
-                    response.raise_for_status()
+                    # Gemini marks the end with finishReason on the last
+                    # candidate rather than with a sentinel event or [DONE].
+            async with self._client(api_key) as client, client.stream(
+                "POST",
+                f"/models/{model_id}:streamGenerateContent",
+                params={"alt": "sse"},
+                json=payload,
+            ) as response:
+                self._raise_for_status(response.status_code, model_id)
+                response.raise_for_status()
 
-                    async for line in response.aiter_lines():
-                        chunk = _parse_gemini_stream_line(line)
-                        if chunk is not None:
-                            yield chunk
+                async for line in response.aiter_lines():
+                    chunk = _parse_gemini_stream_line(line)
+                    if chunk is not None:
+                        yield chunk
         except httpx.ConnectError as exc:
             raise ProviderUnavailableError(f"Could not reach Gemini API: {exc}") from exc
         except httpx.TimeoutException as exc:
@@ -210,6 +228,8 @@ class GeminiProvider(AIProvider):
 
 
 def _to_gemini_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Gemini nests every declaration under a single tools[0].functionDeclarations
+    # array, where the canonical (OpenAI-style) shape is a flat list of tools.
     return [
         {
             "functionDeclarations": [
@@ -232,6 +252,9 @@ def _parse_gemini_tool_calls(parts: list[dict[str, Any]]) -> list[ToolCall] | No
             continue
         calls.append(
             ToolCall(
+                # Gemini returns no call id, but ToolCall.id is how the rest
+                # of NEXUS correlates a result back to its request. Synthesize
+                # one so that contract holds for every provider.
                 id=uuid.uuid4().hex,
                 name=function_call.get("name", ""),
                 arguments=function_call.get("args") or {},

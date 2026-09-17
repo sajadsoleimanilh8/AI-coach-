@@ -150,6 +150,10 @@ def _real_provider_run() -> EvalRun:
 def test_comparing_across_provider_modes_reports_a_refusal_not_a_traceback(
     _memory_db_env, monkeypatch, capsys
 ) -> None:
+    # compare_runs() raises here by design. The CLI has to turn that into
+    # a reported refusal with a non-zero exit — an unhandled traceback
+    # would be indistinguishable from a crash in CI, and printing "no
+    # regressions" would be worse still.
     import asyncio
 
     asyncio.run(_seed_baseline(_memory_db_env, _good_run("fake-mode-baseline")))

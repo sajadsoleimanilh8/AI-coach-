@@ -14,6 +14,11 @@ _SUB_QUESTION_SPLIT_RE = re.compile(r"[?;]|\band\b|\balso\b|,", re.IGNORECASE)
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _MIN_SUB_QUESTION_TOKENS = 2
 
+# Fraction of a sub-question's content words that must appear in the
+# gathered evidence for it to sit in each tier. Lexical overlap is a crude
+# proxy for "is this supported", but it is DETERMINISTIC — and the decision
+# to keep searching has to be the code's, not the model's, or the loop
+# terminates whenever the model feels finished (principle 5).
 _KNOWN_THRESHOLD = 0.7
 _LIKELY_THRESHOLD = 0.4
 _UNCERTAIN_THRESHOLD = 0.15
@@ -122,6 +127,10 @@ def format_coverage(coverage: Coverage) -> str:
 class AutonomousResearchAgent(ResearchAgent):
     """Iterative research: search, assess coverage, identify what remains
     unknown, search again — up to max_rounds.
+
+    The division of labour is the point. The LLM proposes what to search
+    next; the code decides whether there is anything left worth searching
+    and when to stop. Inherits verify_output=True from ResearchAgent.
     """
 
     name = "autonomous_research"

@@ -1,5 +1,52 @@
 """
 Re-create `matches` rows for analysis output that outlived its match row.
+
+    venv/Scripts/python -m scripts.restore_orphaned_matches --dry-run
+    venv/Scripts/python -m scripts.restore_orphaned_matches --apply
+
+WHY THIS IS NEEDED
+    backend/tests fixtures issue unqualified deletes (`query(Match).delete()`
+    and friends). Running `pytest` from the repo root used to bind them to the
+    REAL database instead of a throwaway one, so a green test run destroyed
+    every Match / Video / ProcessingJob / PlayerMetric row while leaving the
+    expensive CV output -- player_tracking, frames, player_detections,
+    ball_detections, calibration_status, team_metrics, analysis_results --
+    fully intact.
+
+    The root cause is fixed (see the repo-root conftest.py and
+    backend/tests/test_database_isolation.py). This script addresses the
+    consequence: without a `matches` row, all of that surviving output is
+    unreachable. GET /api/matches/{id} 404s, so every match-scoped tab, the
+    heatmap, the tracking window and the events timeline refuse to load data
+    that is sitting right there in the database.
+
+WHAT IT RESTORES, AND WHAT IT REFUSES TO INVENT
+    RESTORED, because it is recoverable from surviving rows:
+      - match_id      -- read from the orphaned rows themselves
+      - duration      -- computed from this match's own `frames` rows
+                         (max frame_number / fps), which is a real
+                         measurement, not an estimate
+      - created_at    -- the earliest computed_at on this match's surviving
+                         metric/calibration rows, so ordering in the match
+                         list is genuine
+
+    NOT RESTORED, because it is genuinely gone:
+      - home_team / away_team -- the operator typed these at upload time and
+        nothing else recorded them. Written as an explicit "(recovered)"
+        placeholder rather than a plausible-looking guess.
+      - video_path / the Video row -- the clips are still on disk under
+        storage/uploads/<video_id>.mp4, but the video_id <-> match_id link
+        lived only in the deleted `videos` table. It is NOT reconstructed by
+        matching durations: pairing one match's clip with another match's
+        tracking data is precisely the quietly-wrong reading this project is
+        built to avoid, and a near-miss on duration is indistinguishable from
+        a hit. video_path is set to the empty string and the UI will
+        correctly report that there is no playable video for these matches.
+      - player_metrics -- derived output, deleted, and only reproducible by
+        re-running the pipeline on the original clip.
+
+    The script is INSERT-only. It never updates or deletes an existing row,
+    so running it twice is a no-op and it cannot damage a match that is fine.
 """
 
 from __future__ import annotations
@@ -31,6 +78,7 @@ def orphaned_match_ids(db) -> set[str]:
         referenced.update(
             row[0] for row in db.query(model.match_id).distinct().all() if row[0]
         )
+    # analysis_results has no match_id column -- it is inside result_json.
     for (payload,) in db.query(AnalysisResult.result_json).all():
         if isinstance(payload, dict) and payload.get("match_id"):
             referenced.add(payload["match_id"])
@@ -47,7 +95,13 @@ def orphaned_match_ids(db) -> set[str]:
 
 
 def measured_duration(db, match_id: str) -> float:
-    """Seconds, from this match's own persisted Frame rows."""
+    """Seconds, from this match's own persisted Frame rows.
+
+    Frame rows are stride-sampled (FRAME_PERSIST_STRIDE), so the highest
+    frame_number is a lower bound on the clip's length -- stated here rather
+    than rounded up into a guess. Returns 0.0 when there are no frames, which
+    is the honest "not measurable" value the schema already uses.
+    """
     row = (
         db.query(func.max(Frame.frame_number), func.max(Frame.fps))
         .filter(Frame.match_id == match_id)
@@ -111,6 +165,7 @@ def main() -> int:
                 match_id=match_id,
                 home_team=PLACEHOLDER_TEAM,
                 away_team=PLACEHOLDER_TEAM,
+                # No video link is invented -- see this module's docstring.
                 video_path="",
                 duration=measured_duration(db, match_id),
                 created_at=earliest_timestamp(db, match_id) or datetime.utcnow(),

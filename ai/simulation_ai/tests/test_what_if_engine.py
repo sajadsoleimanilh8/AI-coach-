@@ -5,7 +5,9 @@ import pytest
 
 from ai.computer_vision.player_tracking.trajectory import TrackingPoint
 from ai.simulation_ai.what_if_analysis.engine import (
-    Intervention, SimulationError, simulate,
+    Intervention,
+    SimulationError,
+    simulate,
 )
 
 
@@ -101,7 +103,7 @@ def test_removing_a_player_changes_the_shape_metrics():
     res = simulate(_teams(), [Intervention("remove_player", team_id="A", player_id=104)],
                    team_assignment_confidence=0.9)
     formation = next(m for m in res.metrics if m.metric_name == "formation")
-    assert formation.baseline_sub_scores
+    assert formation.baseline_sub_scores  # 10 players
     assert "remove player 104" in formation.parameter_changed
 
 

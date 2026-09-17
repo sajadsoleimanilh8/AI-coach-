@@ -1,5 +1,19 @@
 """
 Camera (pixel) -> pitch (meters) homography.
+
+Implements the contract required by docs/data analysis.md (Analysis Logic
+Design v3) §0.2: every homography transform must carry a confidence score
+derived from reprojection error, not just report coordinates. Downstream
+consumers (First Touch, Press Resistance, Formation Detection, Injury Risk)
+treat pitch_x_m/pitch_y_m as unusable when homography_confidence is below
+HOMOGRAPHY_CONFIDENCE_MIN (0.6) -- see constants.py.
+
+Typical flow:
+    1. Run calibrate_pitch.py once per match/camera-angle to click 4-8+
+       reference points in a representative frame -> saves a calibration
+       JSON with pixel_pts, pitch_pts, H, reprojection_error, confidence.
+    2. Load that JSON at analysis time, call pixel_to_pitch() (or the batch
+       variant) on every tracked player/ball pixel position for that match.
 """
 
 from __future__ import annotations
@@ -15,15 +29,22 @@ import numpy as np
 class HomographyResult:
     """Everything downstream code needs to trust (or distrust) this transform."""
 
-    H: np.ndarray
-    reprojection_error_m: float
-    max_reprojection_error_m: float
-    confidence: float
+    H: np.ndarray                     # 3x3 homography matrix, pixel -> pitch meters
+    reprojection_error_m: float       # mean per-point error over ALL points, in pitch meters
+    max_reprojection_error_m: float   # worst single-point error, in pitch meters
+    confidence: float                 # 0-1, see homography_confidence()
     n_points: int
     per_point_errors_m: list = field(default_factory=list)
+    # RANSAC consensus. None when RANSAC did not run (method=0, an exact fit
+    # through every point), which is NOT the same as "RANSAC ran and every
+    # point was an inlier" -- consumers must be able to tell those apart, so
+    # the unknown case stays None rather than defaulting to n_points.
     n_inliers: int | None = None
     inlier_ratio: float | None = None
+    # Mean error over the consensus set only. Equal to reprojection_error_m
+    # when RANSAC did not run.
     inlier_reprojection_error_m: float | None = None
+    #: Boolean mask over the input correspondences, True = inlier.
     inlier_mask: list = field(default_factory=list)
 
 
@@ -35,6 +56,49 @@ def compute_homography(
 ) -> HomographyResult:
     """
     Fit a pixel -> pitch-meters homography from corresponding point pairs.
+
+    Args:
+        pixel_pts: (N, 2) array of (x, y) pixel coordinates in the source frame.
+        pitch_pts: (N, 2) array of (x, y) pitch coordinates in meters
+            (use constants.REFERENCE_POINTS for known landmarks).
+        method: 0 for exact least-squares/DLT fit (use when N == 4 and every
+            point is trusted, e.g. clean corner-flag picks). Pass
+            cv2.RANSAC for N > 4 with possibly-noisy clicks, which will
+            down-weight outlier points automatically.
+        ransac_reproj_threshold: only used when method=cv2.RANSAC; max
+            allowed reprojection error (in pitch meters) for a point to be
+            treated as an inlier.
+
+    Returns:
+        HomographyResult with the fitted matrix and an honest error estimate
+        computed by reprojecting every input point and comparing against its
+        known pitch position.
+
+    CONFIDENCE, AND WHY IT IS MEASURED ON THE CONSENSUS SET WHEN RANSAC RUNS
+        `reprojection_error_m` is, and remains, the mean over EVERY input
+        point. `confidence` is derived from the mean over the RANSAC
+        consensus set instead, and equals the all-point value when RANSAC did
+        not run (method=0), so the exact-fit path is bit-for-bit unchanged.
+
+        The reason for the split: when a caller passes points it already
+        knows may contain outliers -- which is exactly why it passed
+        cv2.RANSAC -- scoring the fit on the outliers it explicitly asked to
+        have rejected describes a homography that was never used. On the
+        calibration model's broadcast output that made every frame score 7-25
+        m and fail the gate, including frames whose consensus set was
+        sub-metre.
+
+        This is only safe because the consensus set is SIZE-GATED downstream
+        (HOMOGRAPHY_MIN_INLIERS / HOMOGRAPHY_MIN_INLIER_RATIO in
+        CalibrationState.evaluate). Four points always agree perfectly, so
+        without those gates this would be a confidence-manufacturing machine.
+        `n_inliers` and `inlier_ratio` are reported so that gate can be
+        applied, and both errors are kept so the discrepancy stays visible.
+
+    Raises:
+        ValueError: fewer than 4 point correspondences given (a homography
+            has 8 degrees of freedom and needs at least 4 non-collinear
+            point pairs to be well-posed).
     """
     pixel_pts = np.asarray(pixel_pts, dtype=np.float64).reshape(-1, 2)
     pitch_pts = np.asarray(pitch_pts, dtype=np.float64).reshape(-1, 2)
@@ -61,6 +125,9 @@ def compute_homography(
             "aren't collinear or duplicated"
         )
 
+    # Reproject every input pixel point through H and compare to its known
+    # pitch position. Measured directly rather than trusting cv2's internal
+    # bookkeeping, so the numbers below describe the matrix actually returned.
     projected = _apply_homography(pixel_pts, H)
     per_point_errors = np.linalg.norm(projected - pitch_pts, axis=1)
 
@@ -76,6 +143,8 @@ def compute_homography(
         inlier_mask = inliers.tolist()
         n_inliers = int(inliers.sum())
         inlier_ratio = float(n_inliers) / float(len(pixel_pts))
+        # An empty consensus set cannot happen when findHomography returned a
+        # matrix, but guard rather than divide by zero if cv2 ever changes.
         inlier_error = (float(np.mean(per_point_errors[inliers]))
                         if n_inliers > 0 else mean_error)
 
@@ -106,6 +175,9 @@ def _apply_homography(points: np.ndarray, H: np.ndarray) -> np.ndarray:
 def pixel_to_pitch(x: float, y: float, H: np.ndarray) -> tuple[float, float]:
     """
     Transform a single pixel coordinate to pitch meters.
+
+    Returns (pitch_x_m, pitch_y_m). Matches the field naming used by
+    PlayerTracking / Event in docs/database_schema.md.
     """
     result = _apply_homography(np.array([[x, y]]), H)
     px, py = result[0]
@@ -117,6 +189,13 @@ def pixels_to_pitch(points: np.ndarray | list, H: np.ndarray) -> np.ndarray:
     Batch version of pixel_to_pitch. Use this for whole tracking arrays
     (e.g. all player positions in a frame, or a full trajectory) instead of
     looping pixel_to_pitch() point by point -- one cv2 call instead of N.
+
+    Args:
+        points: (N, 2) array of (x, y) pixel coordinates.
+        H: 3x3 homography matrix from compute_homography().
+
+    Returns:
+        (N, 2) array of (pitch_x_m, pitch_y_m).
     """
     return _apply_homography(np.asarray(points, dtype=np.float64), H)
 
@@ -126,6 +205,32 @@ def point_spread(
 ) -> float:
     """
     Convex-hull area of the calibration points, as a fraction of frame area.
+
+    WHY THIS IS NOT REDUNDANT WITH reprojection_error_m / confidence
+        Reprojection error measures how consistently the points agree with
+        EACH OTHER. It is lowest when they are clustered, because a small
+        patch of the image is nearly affine and almost any homography fits
+        it. Four landmarks bunched in one corner therefore produce
+        near-zero error and ~1.0 confidence while the matrix is wildly
+        wrong everywhere else in the frame -- which is where the players
+        are. This function measures COVERAGE instead, the thing confidence
+        structurally cannot see.
+
+    Args:
+        pixel_pts: (N, 2) array of (x, y) source points in pixels.
+        frame_size: (width, height) of the frame those pixels came from.
+
+    Returns:
+        Hull area / frame area, in [0, 1]. Returns 0.0 for fewer than 3
+        points, for degenerate (collinear or coincident) sets, and for a
+        non-positive frame size -- all of which are "no measurable spread",
+        not "spread unknown". A collinear set genuinely has zero area and
+        cannot constrain a homography, so 0.0 is the honest answer rather
+        than a special case.
+
+        Values may exceed nothing but 1.0 is not clamped away artificially;
+        points outside the frame bounds (a mis-detected landmark) can push
+        this above 1.0, and that is worth seeing rather than hiding.
     """
     width, height = frame_size
     if width <= 0 or height <= 0:
@@ -140,6 +245,8 @@ def point_spread(
     except cv2.error:
         return 0.0
 
+    # contourArea returns 0.0 for collinear hulls, which is exactly the
+    # answer we want for a degenerate point set.
     return float(cv2.contourArea(hull)) / float(width * height)
 
 
@@ -150,6 +257,44 @@ def homography_geometry_problems(
 ) -> list[str]:
     """
     Structural sanity checks on a fitted pixel -> pitch homography.
+
+    WHAT THIS CATCHES THAT REPROJECTION ERROR CANNOT
+        Reprojection error asks "do these correspondences agree with each
+        other". A homography built from landmarks whose IDENTITIES were
+        swapped -- the mirrored-pitch failure documented in
+        scripts/validate_auto_calibration.py -- agrees with itself perfectly
+        and is wrong by the width of the pitch. Error is structurally blind
+        to it, because the mistake is in the labels, not the residuals.
+
+        These checks look at the matrix's effect on a REGION OF THE IMAGE
+        instead, where that mistake is visible: project a probe rectangle
+        into pitch metres and ask whether the result is a shape a camera
+        could actually be seeing.
+
+    WHICH REGION IS PROBED, AND WHY NOT THE FRAME CORNERS
+        The probe is the bounding box of `keypoints_px` when given. Probing
+        the FRAME's corners instead looks obvious and is wrong: the top edge
+        of a broadcast frame is crowd and sky, which lies above the pitch
+        plane's horizon, so it projects to hundreds of metres off-pitch under
+        a perfectly good homography. Verified against the synthetic camera in
+        tests/test_homography.py, whose corners project to -782 m while the
+        fit is exact to 3e-7 m. The calibration keypoints, by contrast, ARE
+        pitch landmarks and so are guaranteed to lie on the plane the
+        homography is defined for.
+
+        With no keypoints available the probe falls back to the frame's
+        central 60%, which is far more likely to be pitch than its corners
+        but is still only a fallback.
+
+    Returns a list of human-readable problems, EMPTY when the homography is
+    geometrically plausible. Returning the reasons rather than a bool is the
+    point -- "rejected" without a why is what this codebase already refuses
+    to emit elsewhere.
+
+    Note this is a NECESSARY-condition test, not a sufficient one. Passing it
+    means the fit is not obviously impossible; it does not mean the fit is
+    accurate. It is one gate among several, never a substitute for the
+    confidence and consensus gates.
     """
     from ai.computer_vision.tactical_analysis.constants import (
         HOMOGRAPHY_MAX_OUT_OF_BOUNDS_M,
@@ -178,6 +323,9 @@ def homography_geometry_problems(
                 f"{HOMOGRAPHY_MIN_DETERMINANT:.0e}, the matrix collapses the "
                 "image plane and is not invertible"]
 
+    # Probe rectangle, traversed bottom-left, bottom-right, top-right,
+    # top-left -- a counter-clockwise circuit in image coordinates (y grows
+    # downward), which is what makes the winding test below meaningful.
     probe_pts = None
     if keypoints_px is not None:
         pts = np.asarray(keypoints_px, dtype=np.float64).reshape(-1, 2)
@@ -203,6 +351,10 @@ def homography_geometry_problems(
         return [f"{region} projects to non-finite pitch coordinates -- the "
                 "homography maps part of it through its horizon"]
 
+    # -- mirroring -------------------------------------------------------
+    # Signed area (shoelace). A pixel->pitch map that preserves orientation
+    # keeps the sign; a mirrored one flips it, and every player then lands on
+    # the wrong side of the pitch while every residual stays small.
     shoelace = 0.0
     for i in range(4):
         x1, y1 = projected[i]
@@ -214,6 +366,7 @@ def homography_geometry_problems(
             f"mirrored pitch geometry: {region} projects with reversed "
             "winding, so pitch x/y are flipped relative to the camera")
 
+    # -- degenerate / implausible extent ---------------------------------
     span_x = float(projected[:, 0].max() - projected[:, 0].min())
     span_y = float(projected[:, 1].max() - projected[:, 1].min())
     span = max(span_x, span_y)
@@ -227,6 +380,9 @@ def homography_geometry_problems(
             f"> {HOMOGRAPHY_MAX_VIEW_SPAN_M} m, a near-degenerate fit "
             "projecting toward the horizon")
 
+    # -- gross out-of-bounds ---------------------------------------------
+    # Overshoot past the touchlines is normal (stands, technical area).
+    # Hundreds of metres off the pitch is not.
     overshoot = max(
         float(-projected[:, 0].min()),
         float(projected[:, 0].max() - PITCH_LENGTH_M),
@@ -239,6 +395,10 @@ def homography_geometry_problems(
             f"to {overshoot:.0f} m beyond the pitch rectangle "
             f"(> {HOMOGRAPHY_MAX_OUT_OF_BOUNDS_M} m)")
 
+    # -- convexity -------------------------------------------------------
+    # A projective map sends a convex quad to a convex quad. A self-
+    # intersecting result means part of the probe crossed the horizon, and
+    # pitch coordinates on the far side of it are meaningless.
     crosses = []
     for i in range(4):
         a = projected[(i + 1) % 4] - projected[i]
@@ -255,6 +415,25 @@ def homography_geometry_problems(
 def homography_confidence(reprojection_error_m: float, scale_m: float = 2.0) -> float:
     """
     Map reprojection error (pitch meters) to a 0-1 confidence score.
+
+    Uses the same exp(-error / scale) shape as Formation Detection's
+    similarity confidence in docs/data analysis.md §3, for consistency
+    across the codebase's confidence formulas: 0 error -> confidence 1.0,
+    error growing relative to `scale_m` decays confidence toward 0.
+
+    `scale_m` = 2.0 means: a 2m average reprojection error yields ~0.37
+    confidence, comfortably below HOMOGRAPHY_CONFIDENCE_MIN (0.6), which a
+    professional broadcast-camera calibration should never actually hit if
+    the clicked points are accurate. Retune scale_m only after checking
+    real calibration data, same caveat as NORMALIZATION_CONSTANT in the
+    Formation Detection calibration procedure.
+
+    Reference points, for intuition:
+        error = 0.0m  -> confidence = 1.00
+        error = 0.5m  -> confidence = 0.78
+        error = 1.0m  -> confidence = 0.61
+        error = 2.0m  -> confidence = 0.37
+        error = 4.0m  -> confidence = 0.14
     """
     if reprojection_error_m < 0:
         raise ValueError("reprojection_error_m cannot be negative")

@@ -1,5 +1,20 @@
 """
 Real pipeline-stage timing.
+
+Every latency number shown anywhere must come from this instrumentation. A
+hand-typed, precise-looking per-stage figure with no profiling code behind it
+is a fabricated benchmark, and it cannot be defended if someone asks to see how
+it was measured.
+
+PipelineTimer replaces that with an honest measurement: every
+PipelineStageTiming attached to an AnalysisResult or served by
+GET /api/pipeline/latency/{job_id} was produced by wrapping real work in
+`with timer.stage("name"):`, on this exact codebase, on this exact run.
+There is no other way for a number to end up in this system.
+
+docs/pipeline_latency_profile.md is regenerated from real
+PipelineLatencyReport data via scripts/generate_latency_report.py -- see
+that file's docstring. It is never hand-edited with numbers again.
 """
 
 from __future__ import annotations
@@ -7,7 +22,7 @@ from __future__ import annotations
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 @dataclass
@@ -52,6 +67,6 @@ class PipelineTimer:
                 {"stage": s.stage, "seconds": s.seconds, "detail": s.detail}
                 for s in self.stages
             ],
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
             "source": "measured",
         }

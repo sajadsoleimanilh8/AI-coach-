@@ -39,6 +39,10 @@ class BaselineCalculator:
     async def get_baselines(self, user_id: str) -> dict[str, Baseline]:
         now = time.time()
         window_start = now - self._window_days * _SECONDS_PER_DAY
+        # A baseline built from the same recent_window_days that
+        # PersonalStateEngine treats as "current" would compare current
+        # state against itself, making every deviation trivially small —
+        # so history strictly excludes that trailing window.
         window_end = now - self._recent_window_days * _SECONDS_PER_DAY
 
         async with self._session_factory() as db:

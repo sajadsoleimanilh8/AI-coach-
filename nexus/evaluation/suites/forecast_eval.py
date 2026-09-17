@@ -14,6 +14,11 @@ _SECONDS_PER_DAY = 86400.0
 class ForecastEvaluator(Evaluator):
     """Builds a synthetic signal series with a KNOWN slope, projects it,
     and checks the projection lands where arithmetic says it should.
+
+    The second half of this suite matters as much as the first: a case
+    with too few points must come back method="insufficient_data" and NO
+    number. A forecaster that quietly emits a projection from two data
+    points is the exact failure this gate exists to catch.
     """
 
     suite = "forecast"
@@ -29,6 +34,9 @@ class ForecastEvaluator(Evaluator):
         values = case.input["values"]
         day_spacing = case.input.get("day_spacing", 1.0)
 
+        # Written oldest-first ending at "now" so the recency-weighted
+        # current state reflects the last value, and the trend fit sees the
+        # whole run-up.
         now = time.time()
         for index, value in enumerate(values):
             offset_days = (len(values) - 1 - index) * day_spacing
@@ -67,6 +75,7 @@ class ForecastEvaluator(Evaluator):
             ("method", forecast.method == case.expected["method"])
         ]
         if case.expected["method"] == "insufficient_data":
+            # The whole point: no number at all, and a caveat that says why.
             checks.append(("no_projection", forecast.projected_value is None))
             checks.append(("has_caveat", bool(forecast.caveat.strip())))
         else:

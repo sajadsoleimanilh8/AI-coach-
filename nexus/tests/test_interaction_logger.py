@@ -52,6 +52,8 @@ async def test_records_nothing_when_disabled(tmp_path) -> None:
 
     interaction_id = await _record(logger)
 
+    # Off by default means genuinely nothing is written — not a row with a
+    # blank prompt, not a row flagged as suppressed. Nothing.
     assert interaction_id is None
     assert await logger.count() == 0
 
@@ -112,6 +114,8 @@ async def test_feedback_on_unknown_interaction_reports_failure(tmp_path) -> None
 
 @pytest.mark.asyncio
 async def test_feedback_still_accepted_when_logging_is_disabled(tmp_path) -> None:
+    # A record written while logging was on stays ratable after it is turned
+    # off — the signal is real and refusing it would throw it away.
     engine = create_async_db_engine(str(tmp_path / "nexus.db"))
     enabled_logger = InteractionLogger(engine, enabled=True)
     await enabled_logger.init()

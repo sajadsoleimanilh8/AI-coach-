@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -126,12 +127,15 @@ async def _make_client(
 
     async with app.router.lifespan_context(app):
         fake_provider = FakeToolCallingProvider(tool_call_rounds=tool_call_rounds)
+        # gpt-4o-mini's real registry entry has supports_tool_calling: true —
+        # registering the fake provider under "openai" lets an explicit
+        # model_id="gpt-4o-mini" resolve to it without a custom registry.
         provider_manager = ProviderManager(
             {"local": FakeLocalProvider(), "openai": fake_provider}
         )
-        app.state.provider_manager = provider_manager
-        app.state.router = ModelRouter(provider_manager, list_models())
-        app.state.tool_registry = ToolRegistry({"calculator": _FakeCalculatorTool()})
+        app.state.services.provider_manager = provider_manager
+        app.state.services.router = ModelRouter(provider_manager, list_models())
+        app.state.services.tool_registry = ToolRegistry({"calculator": _FakeCalculatorTool()})
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -169,9 +173,11 @@ async def test_tool_call_then_final_answer_populates_tool_calls_made(client_one_
     assert body["tool_calls_made"] == [
         {"name": "calculator", "arguments": {"a": 2, "b": 3}, "result_summary": "5"}
     ]
+    # cumulative usage across both generate() calls in the loop
     assert body["usage"]["prompt_tokens"] == 30
     assert body["usage"]["completion_tokens"] == 13
     assert provider.generate_call_count == 2
+    # every call in the loop must have carried the tool schemas
     assert all(call for call in provider.received_tools_per_call)
 
 
@@ -203,6 +209,7 @@ async def test_max_iterations_cap_is_respected(client_exceeds_cap) -> None:
 
     assert response.status_code == 200
     body = response.json()
+    # default routing.tools.max_iterations is 3
     assert provider.generate_call_count == 3
     assert len(body["tool_calls_made"]) == 3
     assert "max_iterations" in body["classification_reason"]
@@ -242,4 +249,5 @@ async def test_use_tools_false_never_populates_tool_calls_made(client_one_round)
 
     assert response.status_code == 200
     assert response.json()["tool_calls_made"] is None
+    # the non-tools path must never pass tools= to generate()
     assert provider.received_tools_per_call == [None]

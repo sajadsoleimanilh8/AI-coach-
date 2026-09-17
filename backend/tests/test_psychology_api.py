@@ -1,18 +1,23 @@
 """
 API tests for the Pre-Match Psychology Intelligence router
 (backend/api/psychology.py).
+
+Runs the real FastAPI app against a throwaway SQLite file: DATABASE_URL is
+pointed at a temp path BEFORE backend.database.session is first imported, so
+the app's own startup Base.metadata.create_all() builds the schema there and
+the developer's sports_strategy.db is never touched. That also means these
+tests exercise the real table definitions, not a hand-built test schema -- if a
+column or FK is wrong in models.py, it fails here.
+
+Same structure as the sibling test_prematch_health_api.py in this directory.
 """
 
 import os
-import sys
 import tempfile
 
 import pytest
 
-repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-if repo_root not in sys.path:
-    sys.path.insert(0, repo_root)
-
+# Must happen before any backend.database import binds the engine.
 _TEST_DB_DIR = tempfile.mkdtemp(prefix="psychology_tests_")
 _TEST_DB_PATH = os.path.join(_TEST_DB_DIR, "test_psychology.db")
 os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB_PATH}"
@@ -32,7 +37,7 @@ from backend.database.session import Base, SessionLocal, engine  # noqa: E402
 
 @pytest.fixture(scope="module")
 def client():
-    with TestClient(app) as test_client:
+    with TestClient(app) as test_client:  # triggers the startup create_all
         yield test_client
 
 
@@ -124,8 +129,9 @@ def _make_player_metric(match_id: str, cv_player_id: int, name: str, value, conf
         session.close()
 
 
-
-
+# ---------------------------------------------------------------------------
+# Validation -- Pydantic produces the 422, not hand-rolled checks
+# ---------------------------------------------------------------------------
 @pytest.mark.parametrize("bad_value", [0, 11, -3])
 def test_out_of_range_rating_is_rejected_with_422(client, bad_value):
     response = client.post(
@@ -162,8 +168,9 @@ def test_unknown_match_id_is_rejected_rather_than_stored_dangling(client):
     assert response.status_code == 404
 
 
-
-
+# ---------------------------------------------------------------------------
+# Submit -> latest round trip
+# ---------------------------------------------------------------------------
 def test_submit_returns_the_scored_contract(client):
     response = client.post("/api/psychology/p1/submit", json=STRONG_PAYLOAD)
     assert response.status_code == 201
@@ -237,12 +244,13 @@ def test_latest_can_be_filtered_by_match(client):
 
 def test_latest_404s_for_a_match_with_no_submission(client):
     match_id = _make_match()
-    client.post("/api/psychology/p1/submit", json=STRONG_PAYLOAD)
+    client.post("/api/psychology/p1/submit", json=STRONG_PAYLOAD)  # unlinked
     assert client.get(f"/api/psychology/p1/latest?match_id={match_id}").status_code == 404
 
 
-
-
+# ---------------------------------------------------------------------------
+# History
+# ---------------------------------------------------------------------------
 def test_history_is_newest_first(client):
     client.post("/api/psychology/p1/submit", json=STRONG_PAYLOAD)
     client.post("/api/psychology/p1/submit", json=PRESSURED_PAYLOAD)
@@ -276,8 +284,9 @@ def test_submission_index_is_per_player(client):
     assert body["submission_index"] == 1
 
 
-
-
+# ---------------------------------------------------------------------------
+# Single-assessment reads
+# ---------------------------------------------------------------------------
 def test_features_endpoint_serves_the_normalized_vector(client):
     submitted = client.post("/api/psychology/p1/submit", json=STRONG_PAYLOAD).json()
     response = client.get(
@@ -286,6 +295,7 @@ def test_features_endpoint_serves_the_normalized_vector(client):
     assert response.status_code == 200
     body = response.json()
     assert body["features"]["mental_clarity"] == 90.0
+    # Direction ships with the vector -- a bare 0-100 number is ambiguous.
     assert body["feature_directions"]["stress_score"] == "higher_is_worse"
     assert body["feature_directions"]["focus_score"] == "higher_is_better"
 
@@ -317,8 +327,9 @@ def test_unknown_assessment_id_404s(client):
     assert client.get("/api/psychology/p1/does-not-exist").status_code == 404
 
 
-
-
+# ---------------------------------------------------------------------------
+# Historical integration (§5)
+# ---------------------------------------------------------------------------
 def test_history_is_only_consulted_when_cv_player_id_is_supplied(client):
     """Without an explicit cv_player_id there is no link into CV data at all --
     the two ID spaces are never joined by guesswork."""
@@ -344,6 +355,8 @@ def test_supplied_cv_player_id_folds_in_labelled_proxies(client):
 
     assert body["cv_player_id"] == 7
     assert body["historical_context"]
+    # Every proxy is explicitly labelled as observed performance, never as a
+    # measure of a mental state.
     assert all("proxy" in item for item in body["historical_context"])
     assert body["confidence_level"] == "normal"
 
@@ -378,7 +391,7 @@ def test_unusable_history_degrades_confidence_but_still_scores(client):
     ).json()
 
     assert body["confidence_level"] == "low_upstream_confidence"
-    assert body["mental_readiness"] >= 70
+    assert body["mental_readiness"] >= 70  # the self-report score still stands
 
 
 def test_missing_cv_rows_are_not_a_degraded_state(client):
@@ -392,8 +405,9 @@ def test_missing_cv_rows_are_not_a_degraded_state(client):
     assert body["historical_context"] == []
 
 
-
-
+# ---------------------------------------------------------------------------
+# Persistence
+# ---------------------------------------------------------------------------
 def test_raw_answers_and_features_are_both_persisted(client):
     """Storing the answers is what makes a score auditable and lets a formula
     change be re-run over historical submissions."""
@@ -407,6 +421,7 @@ def test_raw_answers_and_features_are_both_persisted(client):
         assert row.features["mental_clarity"] == 90.0
         assert row.method == MetricMethod.heuristic_proxy
         assert row.confidence_level == MetricConfidence.normal
+        # The per-domain audit trail behind the headline numbers.
         assert row.sub_scores["component_metrics"]
     finally:
         session.close()

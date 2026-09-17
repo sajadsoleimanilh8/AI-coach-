@@ -7,7 +7,12 @@ from nexus.core.types import ChunkStream, GenerationResult, Message, ModelInfo
 
 
 class AIProvider(ABC):
-    """Common interface every model backend (local or cloud) must implement."""
+    """Common interface every model backend (local or cloud) must implement.
+
+    Application code must depend only on this interface, never on a
+    provider-specific SDK — that keeps NEXUS provider-independent per the
+    project's non-negotiable engineering principles.
+    """
 
     name: str
 
@@ -21,7 +26,14 @@ class AIProvider(ABC):
         max_tokens: int | None = None,
         tools: list[dict[str, Any]] | None = None,
     ) -> GenerationResult:
-        """Produce a single, complete response."""
+        """Produce a single, complete response.
+
+        `tools` uses the canonical OpenAI-style function-schema shape
+        ({"name", "description", "parameters": <JSON schema>}) regardless
+        of provider — each adapter translates that into its own API's
+        native tool format internally, so callers never need a
+        provider-specific schema.
+        """
 
     @abstractmethod
     def stream_generate(

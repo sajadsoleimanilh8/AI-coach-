@@ -18,6 +18,8 @@ def test_keyword_overlap_can_reorder_close_cosine_scores() -> None:
 
     reranked = rerank("Arsenal match London", chunks)
 
+    # "b" edges out "a" on raw cosine, but shares zero keywords with the
+    # query while "a" shares three — the blended score should flip the order.
     assert [c.doc_id for c in reranked] == ["a", "b"]
 
 
@@ -25,6 +27,7 @@ def test_final_score_matches_the_documented_formula() -> None:
     chunk = _chunk("a", "arsenal london match", cosine_score=0.4)
     [result] = rerank("arsenal london match", [chunk])
 
+    # query tokens (stopword-light) == chunk tokens exactly -> overlap 1.0
     expected = 0.75 * 0.4 + 0.25 * 1.0
     assert result.score == expected
 
@@ -49,4 +52,6 @@ def test_stopwords_do_not_count_toward_overlap() -> None:
     chunk = _chunk("a", "the a an is are was", cosine_score=0.5)
     [result] = rerank("the a an is are was", [chunk])
 
+    # Every token on both sides is a stopword -> tokenize() yields an empty
+    # set for both -> keyword_overlap_score is defined as 0.0 in that case.
     assert result.score == 0.75 * 0.5

@@ -76,7 +76,7 @@ def test_player_metrics_are_averaged_team_wide() -> None:
     assert len(findings) == 1
     finding = findings[0]
     assert finding.area == "decision_making"
-    assert "70.0" in finding.explanation
+    assert "70.0" in finding.explanation  # (80+60)/2
     assert finding.assessment == "strength"
 
 

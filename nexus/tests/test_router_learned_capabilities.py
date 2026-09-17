@@ -41,6 +41,8 @@ class _StubMatrix:
 
 
 def _registry() -> list[ModelInfo]:
+    # Identical cost isolates capability as the only thing that can decide
+    # the ranking under BALANCED.
     return [
         ModelInfo(
             id="model-a", provider="provider-a", kind="chat",
@@ -87,6 +89,8 @@ def test_a_model_missing_from_the_matrix_keeps_its_static_score() -> None:
     matrix = _StubMatrix({"model-a": {"reasoning": 0.99}})
     router = ModelRouter(_manager(), _registry(), capability_matrix=matrix)
 
+    # model-b was never measured, so it falls back to its static 0.65 and
+    # model-a's measured 0.99 wins.
     assert _ranked(router) == ["model-a", "model-b"]
 
 
@@ -105,6 +109,7 @@ def test_learned_scores_can_confirm_the_static_ordering() -> None:
 
 
 def test_a_capability_absent_from_the_learned_dict_falls_back_to_static() -> None:
+    # Measured for coding, but this route scores on reasoning.
     matrix = _StubMatrix({"model-a": {"coding": 0.99}})
     router = ModelRouter(_manager(), _registry(), capability_matrix=matrix)
 
@@ -137,6 +142,7 @@ def test_balanced_policy_also_reads_learned_capabilities() -> None:
 
 
 def test_low_cost_policy_is_unaffected_by_learned_capabilities() -> None:
+    # LOW_COST scores on cost alone; capability must not leak into it.
     matrix = _StubMatrix({"model-a": {"reasoning": 0.99}})
     router = ModelRouter(_manager(), _registry(), capability_matrix=matrix)
 

@@ -33,6 +33,8 @@ def test_empty_checks_list_is_also_unverified() -> None:
 
 
 def test_inconclusive_checks_excluded_from_denominator_entirely() -> None:
+    # One PASS, one heavily-weighted INCONCLUSIVE — if INCONCLUSIVE counted
+    # in the denominator, this would score far below 1.0. It must not.
     checks = [_check(CheckStatus.PASS, weight=1.0), _check(CheckStatus.INCONCLUSIVE, weight=100.0)]
     assert score_checks(checks) == pytest.approx(1.0)
 
@@ -51,6 +53,7 @@ def test_score_is_weighted_pass_fraction() -> None:
         _check(CheckStatus.PASS, weight=1.0),
         _check(CheckStatus.FAIL, weight=1.0),
     ]
+    # 3 pass-weight out of 4 total scored weight
     assert score_checks(checks) == pytest.approx(0.75)
 
 

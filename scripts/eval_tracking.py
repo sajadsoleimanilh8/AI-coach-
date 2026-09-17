@@ -48,13 +48,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
 from ai.computer_vision.player_tracking.tracker import TrackedDetection, track_video
 from ai.computer_vision.tactical_analysis.team_assignment import crop_to_feature
 from configs import registry
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 PLAYER_CLASSES = ("player", "goalkeeper")
 

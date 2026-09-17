@@ -97,6 +97,7 @@ def _context(goal: str) -> AgentContext:
     )
 
 
+# --- the deterministic half -----------------------------------------------
 
 
 def test_sub_questions_are_split_deterministically() -> None:
@@ -172,13 +173,14 @@ def test_format_coverage_is_empty_for_no_items() -> None:
     assert format_coverage(Coverage(items=[])) == ""
 
 
+# --- the loop -------------------------------------------------------------
 
 
 def test_agent_declares_multiple_rounds_and_inherits_verification() -> None:
     agent = AutonomousResearchAgent()
 
     assert agent.max_rounds == 3
-    assert agent.verify_output is True
+    assert agent.verify_output is True  # inherited from ResearchAgent
 
 
 def test_next_round_message_is_none_once_coverage_is_complete() -> None:
@@ -191,7 +193,7 @@ def test_next_round_message_is_none_once_coverage_is_complete() -> None:
         context=context,
     )
 
-    assert result is None
+    assert result is None  # the CODE decided to stop, not the model
 
 
 def test_next_round_message_names_what_is_still_missing() -> None:
@@ -215,7 +217,7 @@ async def test_loop_terminates_on_coverage_before_max_rounds() -> None:
 
     result = await runtime.run(AutonomousResearchAgent(), _context("thermal throttling laptop"))
 
-    assert result.rounds_used == 1
+    assert result.rounds_used == 1  # coverage satisfied after round one
 
 
 @pytest.mark.asyncio
@@ -228,6 +230,7 @@ async def test_loop_terminates_on_max_rounds_when_coverage_never_completes() -> 
         AutonomousResearchAgent(), _context("quantum chromodynamics lattice calculations")
     )
 
+    # Never satisfied, so the hard cap is what stops it — not an infinite loop.
     assert result.rounds_used == 3
 
 
@@ -255,4 +258,4 @@ async def test_a_single_round_agent_is_unaffected_by_the_loop() -> None:
     result = await runtime.run(ResearchAgent(), _context("anything at all"))
 
     assert result.rounds_used == 1
-    assert result.final_answer == "Here is what I found."
+    assert result.final_answer == "Here is what I found."  # no coverage block appended

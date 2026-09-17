@@ -2,10 +2,7 @@
 Unit tests for formation_detection.py
 """
 
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
 
 from ai.computer_vision.tactical_analysis.constants import PITCH_LENGTH_M, PITCH_WIDTH_M
 from ai.computer_vision.tactical_analysis.formation_detection import detect_formation
@@ -34,7 +31,7 @@ def test_scrambled_positions_yields_lower_confidence():
 
 
 def test_fewer_than_8_players_flags_low_sample():
-    positions = [(20.0, 30.0), (30.0, 40.0), (40.0, 50.0)]
+    positions = [(20.0, 30.0), (30.0, 40.0), (40.0, 50.0)]  # 3 players
     result = detect_formation(positions, team_assignment_confidence=0.9)
 
     assert result["value"] is None

@@ -14,7 +14,8 @@ def precision_recall(outcomes: list[CaseOutcome]) -> tuple[float, float]:
     checker that flags every single answer would score a perfect recall
     while being useless (near-zero precision), and pass_rate alone
     doesn't separate those two failure modes. Computed post-hoc from each
-    """
+    outcome's `actual` dict rather than stored as new dataclass fields, so
+    CaseOutcome/SuiteResult stay exactly the shape the spec defines."""
     true_positive = sum(1 for o in outcomes if o.actual.get("should_flag") and o.actual.get("flagged"))
     false_positive = sum(1 for o in outcomes if not o.actual.get("should_flag") and o.actual.get("flagged"))
     false_negative = sum(1 for o in outcomes if o.actual.get("should_flag") and not o.actual.get("flagged"))
@@ -28,10 +29,17 @@ class VerificationEvaluator(Evaluator):
     (must be flagged) and clean answers (must NOT be false-positived).
     Uses enable_fact_check=False/enable_judge=False by default (see
     EvalHarness) so this suite exercises only the deterministic checks —
-    """
+    consistent with never hitting real providers in CI."""
 
     suite = "verification"
 
+    # The only Group D suite whose result can depend on the model under
+    # test: VerificationEngine's FactChecker routes claim extraction and
+    # claim checking through ModelRouter, so a pinned model id reaches a
+    # real provider call. That path is live only when the harness runs
+    # with real providers (enable_fact_check/enable_judge follow
+    # use_real_providers); under fakes this suite exercises the
+    # deterministic checks alone.
     supports_model_pinning = True
 
     async def run_case(self, case: EvalCase, harness: EvalHarness) -> CaseOutcome:

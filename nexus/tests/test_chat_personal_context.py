@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -68,8 +68,8 @@ async def client_and_providers(
         local_provider = _FakeProvider("local")
         cloud_provider = _FakeProvider("openai")
         provider_manager = ProviderManager({"local": local_provider, "openai": cloud_provider})
-        app.state.provider_manager = provider_manager
-        app.state.router = ModelRouter(provider_manager, list_models())
+        app.state.services.provider_manager = provider_manager
+        app.state.services.router = ModelRouter(provider_manager, list_models())
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -124,7 +124,7 @@ async def test_personal_context_is_withheld_from_a_cloud_provider(
             "messages": [{"role": "user", "content": "How am I doing?"}],
             "user_id": "u2",
             "use_personal_context": True,
-            "model_id": "gpt-4o-mini",
+            "model_id": "gpt-4o-mini",  # cloud provider (openai)
         },
     )
 

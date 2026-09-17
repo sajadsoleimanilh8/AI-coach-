@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncIterator, Literal
+from typing import Any, Literal
 
 Role = Literal["system", "user", "assistant", "tool"]
 

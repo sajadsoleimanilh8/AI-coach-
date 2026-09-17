@@ -1,24 +1,53 @@
 """
 One-time manual pitch calibration tool.
+
+Per match / per camera angle, click 4-8+ known pitch landmarks (corner
+flags, penalty box corners, center circle, etc.) on a representative frame.
+Saves a calibration JSON containing the fitted homography, reprojection
+error, and confidence -- this is what the analysis pipeline loads at
+inference time via load_calibration() to convert every tracked pixel
+position to pitch meters for that match.
+
+Deliberately NOT automatic pitch-line detection -- per the task brief, that
+is a Phase 3+ nice-to-have. A human clicking 4-8 points per match/camera
+angle is fast, reliable, and removes an entire class of CV failure modes
+(pitch-line detectors fail on broadcast graphics overlays, pitch
+discoloration, rain, etc.) from the critical path.
+
+Usage (interactive, needs a display):
+    python3 calibrate_pitch.py --video match_clip.mp4 --frame 0 \
+        --out calibrations/match_999.json
+
+Usage (headless / no display, e.g. CI or this sandbox):
+    python3 calibrate_pitch.py --points-file manual_clicks.json \
+        --out calibrations/match_999.json
+    # manual_clicks.json: {"point_name": [x_px, y_px], ...}
+    # point_name must be a key in constants.REFERENCE_POINTS
+
+Keys while calibrating (interactive mode):
+    left-click   record the current reference point at this pixel position
+    s            skip the current reference point (not visible in frame)
+    u            undo the last recorded point
+    n            attempt to fit + preview the homography with points so far
+    q / ESC      finish and save (requires >= MIN_CALIBRATION_POINTS)
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 
-_TACTICAL_ANALYSIS_DIR = os.path.dirname(os.path.abspath(__file__))
-if _TACTICAL_ANALYSIS_DIR not in sys.path:
-    sys.path.insert(0, _TACTICAL_ANALYSIS_DIR)
-
-from constants import CALIBRATION_POINT_ORDER, MIN_CALIBRATION_POINTS, REFERENCE_POINTS
-from homography import compute_homography
+from ai.computer_vision.tactical_analysis.constants import (
+    CALIBRATION_POINT_ORDER,
+    MIN_CALIBRATION_POINTS,
+    REFERENCE_POINTS,
+)
+from ai.computer_vision.tactical_analysis.homography import compute_homography
 
 
 def _load_first_frame(video_path: str, frame_number: int = 0):
@@ -47,7 +76,7 @@ def run_interactive(video_path: str, frame_number: int) -> dict[str, tuple[float
     frame = _load_first_frame(video_path, frame_number)
     display = frame.copy()
     clicked: dict[str, tuple[float, float]] = {}
-    idx = {"i": 0}
+    idx = {"i": 0}  # mutable closure cell
 
     window = "Pitch Calibration - click the highlighted landmark"
 
@@ -80,7 +109,7 @@ def run_interactive(video_path: str, frame_number: int) -> dict[str, tuple[float
 
     while True:
         key = cv2.waitKey(20) & 0xFF
-        if key in (ord("q"), 27):
+        if key in (ord("q"), 27):  # q or ESC
             break
         elif key == ord("s") and idx["i"] < len(CALIBRATION_POINT_ORDER):
             idx["i"] += 1
@@ -123,13 +152,13 @@ def build_calibration_record(
     pixel_pts = np.array([clicked[n] for n in names])
     pitch_pts = np.array([REFERENCE_POINTS[n] for n in names])
 
-    method = 0
+    method = 0  # exact DLT fit; RANSAC only helps once N is large enough to have real outliers
     result = compute_homography(pixel_pts, pitch_pts, method=method)
 
     return {
         "video_path": video_path,
         "frame_number": frame_number,
-        "calibrated_at": datetime.now(timezone.utc).isoformat(),
+        "calibrated_at": datetime.now(UTC).isoformat(),
         "points": [
             {"name": n, "pixel": list(clicked[n]), "pitch_m": list(REFERENCE_POINTS[n])}
             for n in names

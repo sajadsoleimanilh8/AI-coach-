@@ -3,6 +3,11 @@ from __future__ import annotations
 from nexus.personal.state import PersonalStateEngine
 from nexus.sports.adapter import MatchAnalysis
 
+# CV-derived proxies, not self-reported facts — this is the same
+# reasoning SOURCE_CONFIDENCE documents for "inferred" (0.55): a tracked
+# player's press_resistance_score is a heuristic estimate from tracking
+# data, several inference steps removed from the player stating anything
+# about themselves.
 _SIGNAL_SOURCE = "inferred"
 _METRIC_SCALE_MAX = 100.0
 

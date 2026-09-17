@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Callable, Literal
+from typing import Literal
 
 from nexus.personal.baseline import Baseline, BaselineCalculator
 from nexus.personal.dimensions import DIMENSION_GROUPS, INVERTED_DIMENSIONS
@@ -10,6 +11,12 @@ from nexus.personal.state import DimensionState, PersonalState, PersonalStateEng
 from nexus.personal.trends import Trend, compute_trend
 from nexus.personal.weakness import Weakness, WeaknessEngine
 
+# A raw difference below this is noise, not a pattern — same spirit as
+# WeaknessEngine's min_deviation, applied locally since these rules
+# compare state-vs-baseline directly rather than going through
+# WeaknessEngine (a pattern here can involve a dimension that hasn't
+# crossed WeaknessEngine's own threshold yet, e.g. a rising-but-not-yet-
+# "weak" stress trend).
 _MARGIN = 0.05
 _HIGH_FATIGUE_THRESHOLD = 0.6
 _TREND_WINDOW_DAYS = 90.0
@@ -134,9 +141,15 @@ def _rule_stress_accumulation(ctx: _RuleContext) -> HealthPattern | None:
     trend = ctx.trends_by_dim.get(dimension)
     if trend is None:
         return None
+    # mental.stress is INVERTED (nexus/personal/dimensions.py) — trends.py
+    # already sign-corrects for that, so direction="declining" here means
+    # stress is RISING (getting worse), not literally declining in value.
     if trend.direction != "declining":
         return None
 
+    # A week's worth of drift, expressed on the same 0..1 scale a raw
+    # deviation would be — makes this comparable to the other rules'
+    # magnitude without needing a second severity scale.
     weekly_drift = abs(trend.slope) * 7
     return HealthPattern(
         name="stress_accumulation",
@@ -186,6 +199,7 @@ def _rule_recovery_debt(ctx: _RuleContext) -> HealthPattern | None:
         return None
     dim_state, baseline = resolved
 
+    # "Sustained" — a single low reading is noise, not debt.
     if dim_state.sample_count < ctx.min_sample_size:
         return None
     if not (dim_state.value < baseline.value - _MARGIN):
@@ -244,6 +258,7 @@ def _rule_cognitive_dip(ctx: _RuleContext) -> HealthPattern | None:
     )
 
 
+# Module-level so new rules can be added without touching HealthAnalyzer.
 RULES: list[Callable[[_RuleContext], HealthPattern | None]] = [
     _rule_high_load_low_recovery,
     _rule_sleep_inconsistency,
@@ -301,6 +316,9 @@ class HealthAnalyzer:
 
         data_sufficiency = self._data_sufficiency(state)
         if data_sufficiency != "adequate":
+            # Thin data must never support a "significant" claim (principle
+            # 3/4) — cap in place rather than drop the pattern, since "watch
+            # this, but the data is thin" is still useful signal.
             patterns = [replace(p, severity="watch") for p in patterns]
 
         return HealthAnalysis(
@@ -326,6 +344,9 @@ class HealthAnalyzer:
             group_dims = state.group(group_name)
             if not group_dims:
                 continue
+            # Confidence-weighted, and sign-corrected for inverted
+            # dimensions so "higher scorecard value" always means "better"
+            # across every group, not just the non-inverted ones.
             total_weight = sum(d.confidence for d in group_dims.values())
             if total_weight == 0:
                 continue

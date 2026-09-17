@@ -40,6 +40,9 @@ ALL_DIMENSIONS: tuple[str, ...] = tuple(
     dimension for members in DIMENSION_GROUPS.values() for dimension in members
 )
 
+# How much a single signal is trusted, by how it was obtained — used both to
+# weight PersonalStateEngine's recency-weighted mean and to compute
+# DimensionState.confidence (principle 5: never treat a guess like a fact).
 SOURCE_CONFIDENCE: dict[str, float] = {
     "explicit": 0.95,
     "behavioral": 0.75,
@@ -47,4 +50,8 @@ SOURCE_CONFIDENCE: dict[str, float] = {
     "inferred": 0.55,
 }
 
+# Dimensions where a HIGHER raw value is worse (more stress, more fatigue).
+# Every consumer that compares "current vs. baseline" or "rising vs. falling"
+# must sign-correct through this set consistently, or a worsening trend on an
+# inverted dimension reads backwards (e.g. rising stress looking "improving").
 INVERTED_DIMENSIONS: frozenset[str] = frozenset({"mental.stress", "mental.fatigue"})

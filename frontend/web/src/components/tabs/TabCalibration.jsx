@@ -20,15 +20,23 @@ import { EmptyState, ErrorState, LoadingState } from '../ui/States.jsx';
 import { SelectMatchState } from '../ui/MatchPicker.jsx';
 import { NumberField, SubmitButton } from '../ui/Form.jsx';
 
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
+/**
+ * TAB 4 -- a diagnostic view of the homography / pitch-calibration pipeline.
+ *
+ * This is a debugging tool, so it errs entirely towards showing what the
+ * pipeline actually reported: invalid_reason is printed verbatim, the two
+ * detection methods are labelled with their own method strings
+ * ("deterministic", "ml_trained"), and `projection_suppressed` is surfaced
+ * as its own statement rather than being inferred from an empty player list.
+ */
 export default function TabCalibration({ matchId, goToTab, onAttachMatch }) {
   const [frameNumber, setFrameNumber] = useState(0);
   const debug = useAction((frame, signal) => api.getCalibrationDebug(matchId, frame, signal));
 
-                                                                            
+  // A frame rendered for one match must never stay on screen under another.
   useEffect(() => {
     debug.reset();
-                                                           
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchId]);
 
   return (
@@ -180,7 +188,11 @@ function DebugResult({ data }) {
   );
 }
 
-                                                                                                                                                                                                                                                    
+/**
+ * `projection_suppressed` is its own field for a reason: an empty player list
+ * because projection was deliberately withheld means something different from
+ * an empty list because nobody was detected. Both are shown as what they are.
+ */
 function ProjectedPlayers({ players, suppressed }) {
   if (suppressed) {
     return (

@@ -51,6 +51,7 @@ async def test_generate_success() -> None:
 
 @pytest.mark.asyncio
 async def test_api_key_is_sent_as_header_not_query_string() -> None:
+    # A key in the query string leaks into proxy logs and error text.
     def handler(request: httpx.Request) -> httpx.Response:
         assert "test-key" not in str(request.url)
         assert request.headers["x-goog-api-key"] == "test-key"
@@ -95,6 +96,7 @@ async def test_system_message_goes_to_system_instruction_not_contents() -> None:
 
 @pytest.mark.asyncio
 async def test_multiple_system_messages_are_concatenated() -> None:
+    # systemInstruction is a single Content, so multiples must flatten.
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         assert body["systemInstruction"] == {"parts": [{"text": "first\nsecond"}]}
@@ -184,6 +186,7 @@ async def test_function_call_response_parses_into_tool_call_with_synthesized_id(
     call = result.tool_calls[0]
     assert call.name == "get_weather"
     assert call.arguments == {"city": "Oslo"}
+    # Gemini returns no call id; the adapter must synthesize a non-empty one.
     assert call.id
 
 

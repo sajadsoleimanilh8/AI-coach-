@@ -15,6 +15,7 @@ from nexus.api.schemas import (
     DelegationStepSchema,
     UsageSchema,
 )
+from nexus.api.services import get_services
 from nexus.core.exceptions import (
     AgentNotFoundError,
     ContextLengthExceededError,
@@ -34,7 +35,7 @@ router = APIRouter()
 
 @router.get("/agents", response_model=list[AgentInfoSchema])
 async def list_agents(request: Request) -> list[AgentInfoSchema]:
-    enabled = set(request.app.state.settings.agents.enabled)
+    enabled = set(get_services(request).settings.agents.enabled)
     return [
         AgentInfoSchema(name=cls.name, description=cls.description, allowed_tools=cls.allowed_tools)
         for cls in AGENT_REGISTRY.values()
@@ -44,20 +45,20 @@ async def list_agents(request: Request) -> list[AgentInfoSchema]:
 
 @router.post("/agents/{name}/run", response_model=AgentRunResponse)
 async def run_agent(name: str, payload: AgentRunRequest, request: Request) -> AgentRunResponse:
-    settings = request.app.state.settings
+    settings = get_services(request).settings
     try:
         agent = get_agent(name, enabled=settings.agents.enabled)
     except AgentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    runtime: AgentRuntime = request.app.state.agent_runtime
-    rag_service: RagService = request.app.state.rag_service
-    long_term_memory: LongTermMemoryStore = request.app.state.long_term_memory
-    personal_state: PersonalStateEngine = request.app.state.personal_state_engine
-    weakness_engine: WeaknessEngine = request.app.state.weakness_engine
-    profile_store: ProfileStore = request.app.state.profile_store
-    health_analyzer: HealthAnalyzer = request.app.state.health_analyzer
-    sports_adapter: SportsDataAdapter = request.app.state.sports_adapter
+    runtime: AgentRuntime = get_services(request).agent_runtime
+    rag_service: RagService = get_services(request).rag_service
+    long_term_memory: LongTermMemoryStore = get_services(request).long_term_memory
+    personal_state: PersonalStateEngine = get_services(request).personal_state_engine
+    weakness_engine: WeaknessEngine = get_services(request).weakness_engine
+    profile_store: ProfileStore = get_services(request).profile_store
+    health_analyzer: HealthAnalyzer = get_services(request).health_analyzer
+    sports_adapter: SportsDataAdapter = get_services(request).sports_adapter
 
     extra: dict[str, object] = {
         "weakness_engine": weakness_engine,

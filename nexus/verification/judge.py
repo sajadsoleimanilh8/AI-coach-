@@ -74,6 +74,11 @@ class MultiModelJudge:
                 break
 
         if chosen is None:
+            # Legitimate "could not escalate" — e.g. a local-only
+            # deployment with a single model. The caller (VerificationEngine)
+            # must record this as an INCONCLUSIVE check, never treat
+            # single-model output as if it had been cross-validated
+            # (principle 1).
             return None
 
         decision, provider = chosen
@@ -91,6 +96,9 @@ class MultiModelJudge:
 
         parsed = _parse_json_object(result.content)
         if parsed is None:
+            # Malformed judge output is never treated as silent agreement
+            # — it's surfaced as a disagreement so the engine records that
+            # the judge ran but its verdict couldn't be trusted.
             return JudgeVerdict(
                 agrees=False,
                 disagreement_summary="Judge response could not be parsed.",

@@ -16,6 +16,9 @@ def _chunk(text: str) -> RetrievedChunk:
     return RetrievedChunk(doc_id="d1", source_name="doc.txt", chunk_text=text, score=0.9, cosine_score=0.9)
 
 
+# ---------------------------------------------------------------------- #
+# check_arithmetic
+# ---------------------------------------------------------------------- #
 
 def test_arithmetic_pass() -> None:
     result = check_arithmetic(CheckContext(text="We know that 12 + 8 = 20, so the total works out."))
@@ -44,6 +47,9 @@ def test_arithmetic_tolerates_small_rounding() -> None:
     assert result.status == CheckStatus.PASS
 
 
+# ---------------------------------------------------------------------- #
+# check_citation_support
+# ---------------------------------------------------------------------- #
 
 def test_citation_support_pass() -> None:
     evidence = [_chunk("Arsenal are a football club based in London, founded in 1886.")]
@@ -70,6 +76,9 @@ def test_citation_support_inconclusive_with_no_evidence() -> None:
     assert result.status == CheckStatus.INCONCLUSIVE
 
 
+# ---------------------------------------------------------------------- #
+# check_internal_contradiction
+# ---------------------------------------------------------------------- #
 
 def test_internal_contradiction_pass() -> None:
     result = check_internal_contradiction(
@@ -98,6 +107,9 @@ def test_internal_contradiction_inconclusive_with_nothing_repeatable() -> None:
     assert result.status == CheckStatus.INCONCLUSIVE
 
 
+# ---------------------------------------------------------------------- #
+# check_unsupported_certainty
+# ---------------------------------------------------------------------- #
 
 def test_unsupported_certainty_pass_with_reasoning() -> None:
     result = check_unsupported_certainty(
@@ -119,6 +131,9 @@ def test_unsupported_certainty_inconclusive_with_no_certainty_language() -> None
     assert result.status == CheckStatus.INCONCLUSIVE
 
 
+# ---------------------------------------------------------------------- #
+# check_refusal_consistency
+# ---------------------------------------------------------------------- #
 
 def test_refusal_consistency_pass() -> None:
     result = check_refusal_consistency(

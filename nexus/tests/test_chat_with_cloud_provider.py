@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -84,9 +84,9 @@ async def client(_memory_db_env: str) -> AsyncIterator[AsyncClient]:
         provider_manager = ProviderManager(
             {"local": FakeLocalProvider(), "openai": FakeCloudProvider()}
         )
-        app.state.provider_manager = provider_manager
-        app.state.provider = provider_manager.get("local")
-        app.state.router = ModelRouter(provider_manager, list_models())
+        app.state.services.provider_manager = provider_manager
+        app.state.services.provider = provider_manager.get("local")
+        app.state.services.router = ModelRouter(provider_manager, list_models())
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:

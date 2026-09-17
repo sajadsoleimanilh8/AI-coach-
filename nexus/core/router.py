@@ -13,6 +13,10 @@ from nexus.models.registry import get_model
 
 logger = get_logger("core.router")
 
+# Maps a TaskType to the capability key in ModelInfo.capabilities that best
+# predicts quality for that task. Anything not listed here falls back to
+# "reasoning" — a deliberately data-driven default rather than a per-task
+# if/else chain, so Phase 3 can extend the map without touching scoring logic.
 _TASK_CAPABILITY_MAP: dict[TaskType, str] = {
     TaskType.CODING: "coding",
     TaskType.MATH: "math",
@@ -28,6 +32,7 @@ _TASK_CAPABILITY_MAP: dict[TaskType, str] = {
     TaskType.SPORTS: "reasoning",
     TaskType.PLANNING: "reasoning",
     TaskType.DOCUMENT_ANALYSIS: "language",
+    # Placeholder until Phase 14 adds real audio capability scores.
     TaskType.AUDIO: "language",
 }
 _DEFAULT_CAPABILITY_KEY = "reasoning"
@@ -42,7 +47,15 @@ def _total_cost(model: ModelInfo) -> float:
 
 
 class CapabilityProvider(Protocol):
-    """Structural type for whatever supplies capability scores."""
+    """Structural type for whatever supplies capability scores.
+
+    Declared as a Protocol rather than importing
+    nexus.intelligence.CapabilityMatrix because that module reads
+    nexus.evaluation types, and nexus/core/ must not depend on
+    nexus/evaluation/. The router only ever needs this one synchronous
+    method, so structural typing keeps the dependency arrow pointing the
+    right way without giving up type checking.
+    """
 
     def effective_capabilities(self, model_id: str) -> dict[str, float]: ...
 
@@ -57,7 +70,13 @@ class RoutingDecision:
 
 
 class ModelRouter:
-    """Scores candidate models from the registry and picks one per policy."""
+    """Scores candidate models from the registry and picks one per policy.
+
+    `route()` resolves a single best decision; `route_with_failover()` walks
+    the full ranked candidate list, health-checking each provider before
+    trusting it, and guarantees a usable (provider, decision) pair by falling
+    all the way back to local if every other candidate is unhealthy.
+    """
 
     def __init__(
         self,
@@ -71,12 +90,17 @@ class ModelRouter:
         self._model_registry = model_registry
         self._default_policy = default_policy
         self._latency_tracker = latency_tracker
+        # None (the default) means score on ModelInfo.capabilities exactly
+        # as before — every existing caller and test is unchanged.
         self._capability_matrix = capability_matrix
 
     def _capability_for(self, model: ModelInfo, cap_key: str) -> float:
         if self._capability_matrix is None:
             return model.capabilities.get(cap_key, 0.0)
         effective = self._capability_matrix.effective_capabilities(model.id)
+        # A matrix with no measurements for this model returns the static
+        # dict unchanged, so this falls through to the same number the
+        # None branch above would have produced.
         return effective.get(cap_key, model.capabilities.get(cap_key, 0.0))
 
     def route(
@@ -90,9 +114,12 @@ class ModelRouter:
         effective_policy = policy or self._default_policy
 
         if requested_model_id:
+            # provider_for_model() validates the model exists and its provider is
+            # registered; the provider *key* (not necessarily provider.name — see
+            # ProviderManager's docstring) comes from the registry entry itself.
             self._provider_manager.provider_for_model(requested_model_id)
             model_info = get_model(requested_model_id)
-            assert model_info is not None
+            assert model_info is not None  # provider_for_model() already validated this
             return RoutingDecision(
                 provider_name=model_info.provider,
                 model_id=requested_model_id,
@@ -130,7 +157,7 @@ class ModelRouter:
         this module (e.g. verification/judge.py, which needs the full
         ranked list to find a second, different model) — keeps
         `_ranked_decisions` itself private so existing internal callers
-        """
+        and tests are untouched."""
         effective_policy = policy or self._default_policy
         return self._ranked_decisions(
             task_type=task_type, policy=effective_policy, require_tool_calling=require_tool_calling
@@ -260,7 +287,14 @@ class ModelRouter:
     def _latency_component(
         self, model: ModelInfo, p50: float | None, max_observed_p50: float, is_local: bool
     ) -> tuple[float, str]:
-        """Returns (component in ~[0,1], note-for-reason-string)."""
+        """Returns (component in ~[0,1], note-for-reason-string).
+
+        component is "higher is better" (mirrors 1 - cost_norm), so it
+        drops straight into the same weighted-sum shape the cost term
+        already uses. Falls back to the Phase 2 is_local heuristic per
+        candidate when this model has no observed data yet — routing must
+        never stall waiting for latency samples that don't exist.
+        """
         if p50 is not None:
             latency_norm = (p50 / max_observed_p50) if max_observed_p50 > 0 else 0.0
             component = 1 - latency_norm
@@ -317,7 +351,7 @@ class ModelRouter:
                     f"{cap_key} capability for task={task_type.value} "
                     f"(cloud providers excluded)."
                 )
-            else:
+            else:  # BALANCED
                 latency_component, latency_note = self._latency_component(
                     model, p50_by_model[model.id], max_observed_p50, is_local
                 )

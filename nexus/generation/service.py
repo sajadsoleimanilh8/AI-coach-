@@ -20,6 +20,9 @@ _SYSTEM_PROMPT = (
     "don't."
 )
 
+# request_type -> TaskType. "study"/"daily_plan" aren't fitness-specific, so
+# they route as general planning rather than forcing a FITNESS-capability
+# model on a request that isn't about physical training.
 _TASK_TYPE_BY_REQUEST: dict[str, TaskType] = {
     "workout": TaskType.FITNESS,
     "recovery": TaskType.FITNESS,
@@ -28,6 +31,9 @@ _TASK_TYPE_BY_REQUEST: dict[str, TaskType] = {
     "daily_plan": TaskType.PLANNING,
 }
 
+# Training advice layered on top of a concerning health pattern is exactly
+# where unsafe text (e.g. "push through the pain") could appear — gate
+# those two request types through the same output filter HealthAgent uses.
 _SAFETY_GATED_REQUEST_TYPES = frozenset({"workout", "recovery"})
 
 

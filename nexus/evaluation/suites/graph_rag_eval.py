@@ -7,12 +7,24 @@ from nexus.evaluation.runner import EvalHarness, Evaluator
 from nexus.evaluation.types import CaseOutcome, EvalCase
 from nexus.rag.graph import Triple
 
+# Deliberately 1. These cases use tiny corpora, and a top_k big enough to
+# return every document would make expansion untestable: there would be
+# nothing left for the graph to find that vector search had not already
+# surfaced. One seed forces the traversal to be what actually reaches the
+# rest.
 _SEED_TOP_K = 1
 
 
 class GraphRagEvaluator(Evaluator):
     """Seeds documents plus an explicit entity graph, retrieves seeds by
     vector search, then expands through the graph.
+
+    Triples are declared by the case rather than extracted, deliberately:
+    EntityExtractor is the one LLM-dependent piece of graph RAG, and a
+    regression gate must not depend on an LLM producing the same triples
+    twice. What this suite measures is the deterministic half — whether
+    traversal reaches material that shares NO vocabulary with the query,
+    and whether the hop and node caps actually hold.
     """
 
     suite = "graph_rag"

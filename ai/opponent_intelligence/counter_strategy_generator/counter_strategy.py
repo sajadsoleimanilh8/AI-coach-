@@ -13,8 +13,8 @@ would be ungrounded) while keeping invented numbers out of the advice.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
 
 from ai.opponent_intelligence.weakness_map.weakness_map import (
     Strength,

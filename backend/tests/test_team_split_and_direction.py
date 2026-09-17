@@ -1,12 +1,26 @@
-"""Per-team team metrics, attacking direction, and frame_id keying."""
+"""Per-team team metrics, attacking direction, and frame_id keying.
+
+These are validated on SYNTHETIC trajectories on purpose. All three fixes
+operate on pitch coordinates, and pitch coordinates only exist when
+`calibration.valid` is True -- which on the real broadcast footage in
+storage/uploads is never (docs/pipeline_architecture.md 6.3,
+`calibration_valid_fraction = 0.0`). Synthetic input is therefore the only
+way to exercise the arithmetic at all; it is not a substitute for
+end-to-end verification and is not presented as one.
+"""
 from __future__ import annotations
 
 from ai.computer_vision.player_tracking.trajectory import TrackingPoint
 from ai.computer_vision.tactical_analysis.attacking_direction import (
-    LEFT_TO_RIGHT, RIGHT_TO_LEFT, UNKNOWN, infer_attacking_directions,
+    LEFT_TO_RIGHT,
+    RIGHT_TO_LEFT,
+    UNKNOWN,
+    infer_attacking_directions,
 )
 from backend.pipeline.runner import (
-    _build_players_by_frame, _positions_by_frame, _score_team_intelligence,
+    _build_players_by_frame,
+    _positions_by_frame,
+    _score_team_intelligence,
     _split_by_team,
 )
 
@@ -33,6 +47,7 @@ def _two_team_trajectories(n_frames=60):
     return traj
 
 
+# ---------------------------------------------------------------- frame_id
 
 def test_players_by_frame_keys_by_real_frame_id_across_a_tracking_gap():
     """The bug: player 2 is occluded for frames 1-3 and re-acquired at 4.
@@ -47,6 +62,7 @@ def test_players_by_frame_keys_by_real_frame_id_across_a_tracking_gap():
 
     assert sorted(by_frame) == [0, 1, 2, 3, 4, 5]
     assert {p["player_id"] for p in by_frame[0]} == {1, 2}
+    # Frames 1-3: player 2 is genuinely absent, and says so.
     for f in (1, 2, 3):
         assert {p["player_id"] for p in by_frame[f]} == {1}
     assert {p["player_id"] for p in by_frame[4]} == {1, 2}
@@ -58,15 +74,16 @@ def test_positions_by_frame_orders_by_frame_id_and_does_not_pad():
         2: [_pt(2, 9, 3.0, 3.0, "B")],
     }
     frames = _positions_by_frame(traj)
-    assert len(frames) == 2
+    assert len(frames) == 2                  # frames 0 and 9, not 10 slots
     assert frames[0] == [(1.0, 1.0)]
     assert sorted(frames[1]) == [(2.0, 2.0), (3.0, 3.0)]
 
 
+# -------------------------------------------------------------- direction
 
 def test_direction_inferred_from_which_end_each_team_occupies():
     d = infer_attacking_directions(_two_team_trajectories())
-    assert d.by_team["team-A"] == LEFT_TO_RIGHT
+    assert d.by_team["team-A"] == LEFT_TO_RIGHT     # nearer x=0, defends left
     assert d.by_team["team-B"] == RIGHT_TO_LEFT
     assert d.resolved
     assert d.separation_m > 50.0
@@ -102,6 +119,7 @@ def test_unknown_team_id_never_gets_a_default_direction():
     assert d.for_team("team-that-does-not-exist") == UNKNOWN
 
 
+# -------------------------------------------------------------- per-team
 
 def test_split_by_team_uses_modal_team_id_and_drops_unassigned():
     traj = {
@@ -109,7 +127,7 @@ def test_split_by_team_uses_modal_team_id_and_drops_unassigned():
         2: [_pt(2, 0, 1.0, 1.0, None), _pt(2, 1, 1.0, 1.0, None)],
     }
     split = _split_by_team(traj)
-    assert set(split) == {"A"}
+    assert set(split) == {"A"}          # player 1 is modal-A; player 2 has no team
     assert list(split["A"]) == [1]
 
 
@@ -121,11 +139,14 @@ def test_team_metrics_are_computed_per_team_not_pooled():
 
     teams = {r["team_id"] for r in rows}
     assert teams == {"team-A", "team-B"}
+    # Five metrics per team, not five for a pooled population.
     assert len(rows) == 10
     assert all(r["team_id"] != "unassigned" for r in rows)
 
     compact = {r["team_id"]: r for r in rows if r["metric_name"] == "compactness_score"}
     assert set(compact) == {"team-A", "team-B"}
+    # Each team is tightly grouped; the POOLED population spans ~75 m of
+    # pitch. A per-team compactness must reflect the team, not the union.
     for r in compact.values():
         assert r["sub_scores"]["n_players_in_team"] == 11
 
@@ -168,4 +189,5 @@ def test_formation_receives_one_point_per_player_not_the_first_ten_samples():
                                     directions=infer_attacking_directions(traj))
     formations = [r for r in rows if r["metric_name"] == "formation"]
     assert len(formations) == 2
+    # 11 players -> 11 mean positions, one per player.
     assert all(r["sample_size"] == 11 for r in formations)

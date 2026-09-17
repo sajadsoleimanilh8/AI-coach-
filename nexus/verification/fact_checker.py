@@ -64,6 +64,10 @@ class FactChecker:
     ) -> None:
         self._router = router
         self._max_claims = max_claims
+        # Normally None: claim extraction/checking picks the best RESEARCH
+        # model like any other call. An evaluation harness pins it so the
+        # run measures one specific model instead of whatever routing
+        # happens to prefer that day.
         self._pinned_model_id = pinned_model_id
 
     async def extract_claims(self, answer: str) -> list[ExtractedClaim]:
@@ -83,7 +87,7 @@ class FactChecker:
         token usage. FactChecker is typically a long-lived singleton
         shared across concurrent requests, so usage is threaded through
         return values rather than mutable instance state, which would
-        """
+        race under concurrent verification calls."""
         claims, extract_usage = await self._extract(answer)
         check_results, check_usage = await self._check(claims, evidence or [])
         combined = Usage(
@@ -135,6 +139,10 @@ class FactChecker:
             return [], Usage()
 
         if not evidence:
+            # No evidence at all was provided to check ANY claim against —
+            # every checkable claim is "we couldn't check", not "checked
+            # and it wasn't there". That distinction is the whole point of
+            # this method (see class docstring / principle 1).
             return [
                 CheckResult(
                     name=f"fact_check:{c.text[:_MAX_NAME_CHARS]}",
@@ -209,6 +217,9 @@ class FactChecker:
                     )
                 )
             else:
+                # "unsupported" (or an unrecognized verdict string) with
+                # evidence actually present is "checked and not there" —
+                # a FAIL, never the same as having no evidence at all.
                 results.append(
                     CheckResult(
                         name=name, status=CheckStatus.FAIL, weight=1.0,

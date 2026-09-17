@@ -1,17 +1,25 @@
 """
 Validation for part-wise training: partition correctness + resume safety.
+
+Proves the properties that matter, rather than asserting them in prose:
+  1. Parts do not overlap.
+  2. No epoch is skipped between Parts.
+  3. The union of all Parts is exactly the full schedule (100% coverage).
+  4. Part sizes are balanced (differ by at most 1).
+  5. Every Part trains on the WHOLE dataset (this is epoch-wise, not
+     file-wise, partitioning) -- checked against the split manifests.
+  6. The ledger's completed/incomplete logic behaves correctly.
+
+    python -m scripts.verify_parts
 """
 
 from __future__ import annotations
 
-import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 from ai.computer_vision.train_parts import PartsState, plan_parts  # noqa: E402
-from configs import registry as R                                  # noqa: E402
+from configs import registry as R  # noqa: E402
 
 failures: list[str] = []
 
@@ -33,9 +41,9 @@ def verify_partitioning() -> None:
         sizes = [p.n_epochs for p in plans]
         label = f"{total_epochs} epochs / {total_parts} parts"
         ok = (
-            len(covered) == len(set(covered))
-            and sorted(covered) == list(range(1, total_epochs + 1))
-            and max(sizes) - min(sizes) <= 1
+            len(covered) == len(set(covered))                 # no overlap
+            and sorted(covered) == list(range(1, total_epochs + 1))  # exact cover
+            and max(sizes) - min(sizes) <= 1                  # balanced
             and len(plans) == total_parts
         )
         check(label, ok, f"sizes={sizes}")
@@ -63,6 +71,7 @@ def verify_whole_dataset_per_part() -> None:
     check("train manifest is non-empty", len(lines) > 0, f"{len(lines):,} images")
     check("train manifest has no duplicates", len(lines) == len(set(lines)),
           f"{len(lines) - len(set(lines))} duplicate(s)")
+    # The data.yaml handed to every Part is identical -- so is the file set.
     y1 = R.build_data_yaml(spec.dataset).read_text(encoding="utf-8")
     y2 = R.build_data_yaml(spec.dataset).read_text(encoding="utf-8")
     check("data.yaml is identical across Parts", y1 == y2,
@@ -84,10 +93,12 @@ def verify_ledger() -> None:
         check("completed part recorded", st.completed() == {1}, f"{st.completed()}")
         check("failed part NOT counted as completed", 2 not in st.completed())
 
+        # survives a reload (i.e. a reboot)
         reloaded = PartsState(path)
         check("ledger survives process restart", reloaded.completed() == {1},
               f"{reloaded.completed()}")
 
+        # corrupt ledger must not brick the run
         path.write_text("{ this is not json", encoding="utf-8")
         recovered = PartsState(path)
         check("corrupt ledger recovers instead of crashing",

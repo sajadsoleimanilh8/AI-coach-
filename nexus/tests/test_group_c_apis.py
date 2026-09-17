@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -115,10 +116,10 @@ async def client(_memory_db_env: str) -> AsyncIterator[AsyncClient]:
     get_settings(refresh=True)
     app = create_app()
     async with app.router.lifespan_context(app):
-        app.state.health_analyzer = _FakeHealthAnalyzer()
-        app.state.personalized_generator = _FakeGenerator()
-        app.state.coach_assistant = _FakeCoachAssistant()
-        app.state.sports_adapter = _FakeSportsAdapter()
+        app.state.services.health_analyzer = _FakeHealthAnalyzer()
+        app.state.services.personalized_generator = _FakeGenerator()
+        app.state.services.coach_assistant = _FakeCoachAssistant()
+        app.state.services.sports_adapter = _FakeSportsAdapter()
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:

@@ -1,13 +1,15 @@
 """
 Unit tests for the Pre-Match Psychology Intelligence scoring engine.
+
+Mirrors ai/player_intelligence/tests/test_player_intelligence.py: the same
+one-assertion-per-behaviour style, no snapshots of
+arbitrary numbers. Where a number IS asserted exactly, it is one the formula
+pins down (a boundary, a documented floor, a stated worked example); everything
+about the overall shape of the scoring is asserted comparatively, so a
+reweighting that preserves the intended ordering does not fail the suite for
+no reason.
 """
 
-import os
-import sys
-
-repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-if repo_root not in sys.path:
-    sys.path.insert(0, repo_root)
 
 import pytest
 
@@ -41,7 +43,9 @@ from ai.psychology_ai.motivation_score.score import score_motivation
 from ai.psychology_ai.pressure_index.score import score_pressure_index
 from ai.psychology_ai.stress_analysis.score import score_stress
 
-
+# ---------------------------------------------------------------------------
+# Fixtures: three questionnaires spanning the intended range.
+# ---------------------------------------------------------------------------
 STRONG = dict(
     concentration_level=9,
     focus_maintenance=9,
@@ -96,8 +100,9 @@ ALL_MAX = {**{item: 10 for item in STRONG if item != "pressure_performance_effec
            "pressure_performance_effect": "improves"}
 
 
-
-
+# ---------------------------------------------------------------------------
+# Feature extraction: scaling
+# ---------------------------------------------------------------------------
 def test_every_declared_feature_is_produced():
     features = extract_features(STRONG)
     assert set(features) == set(FEATURE_NAMES)
@@ -141,11 +146,13 @@ def test_stress_score_is_meaned_then_scaled():
     assert extract_features(responses)["stress_score"] == 50.0
 
 
-
-
+# ---------------------------------------------------------------------------
+# Feature extraction: pressure_sensitivity, one case per categorical answer
+# ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "effect,importance,expected",
     [
+        # base * 0.65 + (importance * 10) * 0.35, per the documented formula.
         ("improves", 1, 20.0 * PRESSURE_EFFECT_WEIGHT + 10.0 * PRESSURE_CONTEXT_WEIGHT),
         ("no_change", 5, 50.0 * PRESSURE_EFFECT_WEIGHT + 50.0 * PRESSURE_CONTEXT_WEIGHT),
         ("reduces", 10, 80.0 * PRESSURE_EFFECT_WEIGHT + 100.0 * PRESSURE_CONTEXT_WEIGHT),
@@ -177,8 +184,9 @@ def test_pressure_sensitivity_rises_with_match_importance():
     assert high > low
 
 
-
-
+# ---------------------------------------------------------------------------
+# Feature extraction: validation
+# ---------------------------------------------------------------------------
 @pytest.mark.parametrize("bad_value", [0, 11, -1])
 def test_out_of_range_rating_is_rejected_not_clamped(bad_value):
     with pytest.raises(QuestionnaireValidationError):
@@ -207,8 +215,9 @@ def test_missing_answer_is_rejected():
         extract_features(incomplete)
 
 
-
-
+# ---------------------------------------------------------------------------
+# Weights
+# ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "weights",
     [FOCUS_WEIGHTS, CONFIDENCE_WEIGHTS, STRESS_WEIGHTS, MOTIVATION_WEIGHTS, READINESS_WEIGHTS],
@@ -218,9 +227,11 @@ def test_composite_weights_sum_to_one(weights):
 
 
 def test_pressure_sensitivity_weights_sum_to_one():
-    assert PRESSURE_EFFECT_WEIGHT + PRESSURE_CONTEXT_WEIGHT == pytest.approx(1.0)
+    assert pytest.approx(1.0) == PRESSURE_EFFECT_WEIGHT + PRESSURE_CONTEXT_WEIGHT
 
-
+# ---------------------------------------------------------------------------
+# Per-domain scorers: normal path and both gating paths
+# ---------------------------------------------------------------------------
 
 SCORERS = [
     (score_focus, "focus_score"),
@@ -253,6 +264,9 @@ def test_scorer_gates_to_low_sample_when_inputs_are_missing(scorer, metric_name)
     assert result["sample_size"] == 0
 
 
+# Only the scorers that actually consult a CV proxy can reach the upstream
+# path; the ones with no honest observable analogue (stress, motivation)
+# declare no proxies and are excluded on purpose.
 UPSTREAM_SCORERS = [
     (score_focus, {"focus_proxy": {"value": None, "confidence": "low_upstream_confidence"}}),
     (
@@ -312,8 +326,9 @@ def test_component_metrics_covers_every_domain():
     assert [m["metric_name"] for m in metrics] == [name for _, name in SCORERS]
 
 
-
-
+# ---------------------------------------------------------------------------
+# The three headline scenarios
+# ---------------------------------------------------------------------------
 def test_strong_mental_state():
     """High focus + high confidence + low stress -> high readiness, low risk."""
     result = assess_psychology(STRONG)
@@ -321,6 +336,7 @@ def test_strong_mental_state():
     assert result["mental_performance_risk"] == "low"
     assert result["factors"]["focus"] == "positive"
     assert result["factors"]["confidence"] == "positive"
+    # A "positive" stress factor means LOW reported stress.
     assert result["factors"]["stress"] == "positive"
 
 
@@ -352,8 +368,9 @@ def test_mixed_state_keeps_high_motivation_positive_despite_high_stress():
     assert result["factors"]["stress"] == "negative"
 
 
-
-
+# ---------------------------------------------------------------------------
+# Determinism and edge cases
+# ---------------------------------------------------------------------------
 def test_identical_input_produces_identical_output():
     assert assess_psychology(STRONG) == assess_psychology(STRONG)
 
@@ -376,7 +393,13 @@ def test_extreme_inputs_do_not_error_and_stay_in_range(responses):
 
 
 def test_all_minimum_answers_put_every_dimension_at_the_scale_floor():
-    """The per-dimension scores hit the documented floor of 10."""
+    """The per-dimension scores hit the documented floor of 10.
+
+    Note mental_readiness itself does NOT land at 0, and should not: an
+    all-1s questionnaire reports minimum stress too, and low stress is good.
+    The aggregate of a self-contradictory questionnaire is not an extreme, and
+    asserting otherwise would be asserting a bug.
+    """
     result = assess_psychology(ALL_MIN)
     assert result["focus"] == 10
     assert result["confidence"] == 10
@@ -390,8 +413,9 @@ def test_all_maximum_answers_put_every_dimension_at_the_scale_ceiling():
     assert result["stress"] == 100
 
 
-
-
+# ---------------------------------------------------------------------------
+# The §4 output contract
+# ---------------------------------------------------------------------------
 def test_contract_shape_and_types():
     result = assess_psychology(STRONG)
     for key in ("mental_readiness", "focus", "confidence", "stress"):
@@ -471,8 +495,9 @@ def test_a_substitute_model_can_be_injected():
     assert result["method"] == "ml_trained"
 
 
-
-
+# ---------------------------------------------------------------------------
+# Historical integration (§5)
+# ---------------------------------------------------------------------------
 def test_history_never_changes_a_headline_score():
     """Corroboration only. If history could move the number, "works from
     self-report alone" would not be true."""

@@ -1,5 +1,45 @@
 """
 Re-split the field-landmark dataset by CLIP, not by frame.
+
+WHY THIS EXISTS
+    The raw dataset (datasets/field_landmarks/field_yolo_raw) ships a
+    train/val split that mixes frames from all three source clips into both
+    sides:
+
+        train: clip0=90, clip1=92, clip2=80
+        val:   clip0=29, clip1=19, clip2=32
+
+    Every frame is named `frame_{clip_id}_{n}.jpg` and there are only THREE
+    source clips. Frames from the same clip share a camera angle, a
+    background, and in many cases near-identical pitch geometry, so a
+    val frame from clip0 is a near-duplicate of some train frame from
+    clip0. Validation metrics on that split measure memorisation of three
+    camera poses, not generalisation to an unseen one -- and a landmark
+    detector's entire job is to work on a camera it has never seen.
+
+    This script regroups at the clip level: a whole clip goes to train or
+    to val, never both.
+
+WHAT IT DOES NOT DO
+    It does not invent, augment, or drop data. Every raw image/label pair
+    lands in exactly one split of the output, and the raw tree is copied
+    from, never moved or modified.
+
+HONEST LIMITATION OF A 3-CLIP DATASET
+    With three clips of roughly equal size (119 / 111 / 112 frames), the
+    smallest possible held-out clip is ~32% of the data, not the ~20-25%
+    a frame-level split would give you. That is not a bug in this script;
+    it is the cost of having only three camera angles. The script prints
+    the achieved fraction so the gap is visible rather than assumed away.
+
+    It also means val is a SINGLE camera angle. A good val score says "the
+    model generalised to this one unseen angle", not "the model
+    generalises". Two clips of training data is thin. Treat the resulting
+    numbers as directional until more clips exist.
+
+Run:
+    python -m scripts.resplit_field_landmarks
+    python -m scripts.resplit_field_landmarks --dry-run
 """
 
 from __future__ import annotations
@@ -18,8 +58,14 @@ DEFAULT_OUT = REPO_ROOT / "datasets" / "field_landmarks" / "field_yolo_v2"
 SPLITS = ("train", "val")
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp"}
 
+# `frame_{clip_id}_{n}` -- clip_id is the group key, n is the frame index
+# within that clip. Anchored so a stray file that merely contains "frame_"
+# is rejected loudly rather than silently grouped under the wrong clip.
 FRAME_RE = re.compile(r"^frame_(\d+)_(\d+)$")
 
+#: Fraction of total frames we would LIKE the val split to be. With three
+#: near-equal clips this is unreachable (see module docstring); the chosen
+#: clip is the one landing closest to it.
 TARGET_VAL_FRACTION = 0.225
 
 
@@ -30,6 +76,11 @@ class ResplitError(RuntimeError):
 def find_dataset_root(raw_root: Path) -> Path:
     """
     Locate the directory that directly contains `images/` and `labels/`.
+
+    The raw drop nests the payload one level deeper than the handoff
+    described (`field_yolo_raw/field_yolo/images/...`), so this descends at
+    most one level rather than hard-coding either shape. It never guesses
+    further than that -- an unrecognised layout raises.
     """
     if (raw_root / "images").is_dir() and (raw_root / "labels").is_dir():
         return raw_root
@@ -67,6 +118,8 @@ def count_label_instances(label_path: Path) -> int:
 def collect_frames(dataset_root: Path) -> dict[int, list[dict]]:
     """
     Walk both raw splits and group every image by clip id.
+
+    Returns {clip_id: [{image, label, n_instances, source_split}, ...]}.
     """
     by_clip: dict[int, list[dict]] = defaultdict(list)
     seen_stems: dict[str, Path] = {}
@@ -82,6 +135,9 @@ def collect_frames(dataset_root: Path) -> dict[int, list[dict]]:
                 continue
             stem = image_path.stem
 
+            # The same stem appearing in both raw splits would mean the raw
+            # data already double-counts a frame; copying both would leak it
+            # across the new split too.
             if stem in seen_stems:
                 raise ResplitError(
                     f"Duplicate frame stem {stem!r} in both {seen_stems[stem]} "
@@ -141,14 +197,17 @@ def verify_assignment(by_clip: dict[int, list[dict]], assignment: dict[int, str]
     """
     problems: list[str] = []
 
-    for cid, frames in by_clip.items():
+    for cid, _frames in by_clip.items():
         split = assignment.get(cid)
         if split is None:
             problems.append(f"clip {cid} was never assigned to a split")
             continue
+        # Condition 2: a clip straddling both splits is the exact leak this
+        # script exists to remove.
         if split not in SPLITS:
             problems.append(f"clip {cid} assigned to unknown split {split!r}")
 
+    # Condition 1: a split with no labelled frames at all.
     for split in SPLITS:
         clips = [cid for cid, s in assignment.items() if s == split]
         if not clips:
@@ -163,6 +222,8 @@ def verify_assignment(by_clip: dict[int, list[dict]], assignment: dict[int, str]
                 "labelled landmark"
             )
 
+    # And per clip: a clip that contributes nothing but empty labels is a
+    # data problem worth surfacing before training, not after.
     for cid, frames in sorted(by_clip.items()):
         if all(f["n_instances"] == 0 for f in frames):
             problems.append(f"clip {cid} has zero labelled instances across all {len(frames)} frames")
@@ -181,7 +242,7 @@ def copy_split(
         (out_root / "images" / split).mkdir(parents=True, exist_ok=True)
         (out_root / "labels" / split).mkdir(parents=True, exist_ok=True)
 
-    written = {split: 0 for split in SPLITS}
+    written = dict.fromkeys(SPLITS, 0)
     for cid, frames in sorted(by_clip.items()):
         split = assignment[cid]
         for frame in frames:

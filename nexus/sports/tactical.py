@@ -6,15 +6,21 @@ from typing import Literal
 from nexus.sports.adapter import MatchAnalysis, SportsMetric
 from nexus.sports.timeline import TacticalTimeline
 
+# The football pipeline's own scorers (ai/team_intelligence/*,
+# ai/player_intelligence/*/score.py) all report on a 0-100 scale — these
+# thresholds are calibrated against that scale, not 0..1.
 _STRENGTH_THRESHOLD = 65.0
 _WEAKNESS_THRESHOLD = 40.0
 
+# Team-level TeamMetric.metric_name -> tactical area name.
 _TEAM_METRIC_AREAS: dict[str, str] = {
     "compactness_score": "defensive_compactness",
     "formation_stability_score": "shape_stability",
     "pressing_intensity_score": "pressing_intensity",
 }
 
+# Player-level PlayerMetric.metric_name -> tactical area name, averaged
+# team-wide across whichever players actually have that metric available.
 _PLAYER_METRIC_AREAS: dict[str, str] = {
     "decision_making_score": "decision_making",
     "passing_vision_score": "passing_vision",
@@ -52,6 +58,10 @@ def _numeric_value(metric: SportsMetric) -> float | None:
 def _team_findings(team_metrics: list[SportsMetric]) -> list[TacticalFinding]:
     findings: list[TacticalFinding] = []
     for metric in team_metrics:
+        # A finding is only ever derived from an AVAILABLE metric — an
+        # unavailable one (value=None or low_upstream_confidence) simply
+        # produces no finding for its area; it is surfaced separately as a
+        # gap, never guessed at.
         if not metric.is_available:
             continue
         area = _TEAM_METRIC_AREAS.get(metric.metric_name)

@@ -1,6 +1,27 @@
 import { useEffect, useState } from 'react';
 
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
+/* ──────────────────────────────────────────────────────────────
+ * STREAMING BACKDROP
+ *
+ * Adapted from the `streaming-text` component. The mechanic is kept
+ * verbatim — a token array, a word-interval timer, a count that walks it,
+ * a hold at the end, and a trailing caret — but everything that made the
+ * original a *content* component has been removed, because this is a
+ * decorative layer behind the hero:
+ *
+ *   - no citations / source chips  ─┐  all three imply the text is a real
+ *   - no copy/retry/vote actions   ─┤  answer with real provenance. It is
+ *   - no follow-up prompts         ─┘  not. It is set dressing.
+ *
+ * The copy is deliberately capability description ("associating identities
+ * across occlusions"), never a measurement. No number appears here that a
+ * reader could mistake for a reading off the pipeline — an ambient layer is
+ * the last place a figure should be invented.
+ *
+ * Restyled to the page's own language: JetBrains Mono, --neon-blue, and the
+ * "// LABEL" mono idiom. It is aria-hidden and pointer-events:none, so it is
+ * invisible to assistive tech and never intercepts a click.
+ * ────────────────────────────────────────────────────────────── */
 
 const WORD_MS = 85;
 const HOLD_MS = 2800;
@@ -16,7 +37,14 @@ const LINES = [
 
 const TOKEN_LINES = LINES.map((line) => line.split(' '));
 
-                                                                                                                                                                                                                                                                                                                                                                     
+/**
+ * Runs only while the landing view is on screen and the tab is focused.
+ *
+ * Two independent reasons, both real: index.html hides the hero outright in
+ * dashboard view (so this would be animating into a `display:none` subtree),
+ * and a backgrounded tab still fires setTimeout. Neither is visible to
+ * anyone, and both keep the main thread busy.
+ */
 function useBackdropActive() {
   const [active, setActive] = useState(true);
 
@@ -48,7 +76,7 @@ export default function StreamingBackdrop() {
   useEffect(() => {
     if (!active) return undefined;
 
-                                                                          
+    // Three phases: type the line, hold it, then fade it out and advance.
     if (!done) {
       const timer = setTimeout(() => setCount((c) => c + 1), WORD_MS);
       return () => clearTimeout(timer);
@@ -74,9 +102,9 @@ export default function StreamingBackdrop() {
       <p className={`ssc-backdrop-line ${clearing ? 'is-clearing' : ''}`.trim()}>
         {tokens.slice(0, count).map((word, index) => (
           <span
-                                                                           
-                                                                          
-                                                                    
+            // Index keying is correct here and nowhere else: the list only
+            // ever grows from the front, and remounting a word is exactly
+            // what re-triggers its resolve animation on a new line.
             key={`${lineIndex}-${index}`}
             className="ssc-backdrop-word"
           >

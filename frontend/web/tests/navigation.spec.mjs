@@ -1,4 +1,15 @@
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
+/**
+ * End-to-end check of dashboard tab navigation, in a real browser.
+ *
+ *   node tests/navigation.spec.mjs            # against http://localhost:3000
+ *   BASE=http://localhost:4173 node tests/...  # against `npm run preview`
+ *
+ * Deliberately driven by chromium rather than by unit-testing the route
+ * parser: the bug this covers was that the visible tab labels did not line up
+ * with their clickable boxes. A parser test passes happily while that is
+ * broken. Every assertion below therefore uses a real mouse click at the
+ * label's own screen position, which is the thing that was actually failing.
+ */
 
 import { chromium } from 'playwright';
 
@@ -18,7 +29,9 @@ const TABS = [
 let passed = 0;
 let failed = 0;
 
-                                                                                                                                                                                                                
+/** innerText returns text AS RENDERED, and .dash-tab is text-transform:
+ *  uppercase — so label matching has to be case-insensitive or every
+ *  assertion fails on styling alone rather than on behaviour. */
 function labelMatches(rendered, expected) {
   return Boolean(rendered) && rendered.toLowerCase().includes(expected.toLowerCase());
 }
@@ -33,7 +46,7 @@ function check(name, condition, detail = '') {
   }
 }
 
-                                                                        
+/** Which tab the DOM currently says is active, and what is rendered. */
 async function activeState(page) {
   return page.evaluate(() => {
     const active = document.querySelector('.dash-tab.is-active');
@@ -57,7 +70,7 @@ const run = async () => {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(String(error)));
 
-                                                                                    
+  // ---------------------------------------------------------------- 1. hit targets
   console.log('\n1. TAB HIT TARGETS (the reported bug)');
   await page.goto(`${BASE}/#dashboard`, { waitUntil: 'networkidle' });
   await page.waitForSelector('.dash-tab', { timeout: 10000 });
@@ -65,8 +78,8 @@ const run = async () => {
   const tabCount = await page.locator('.dash-tab').count();
   check(`all ${TABS.length} tabs rendered`, tabCount === TABS.length, `found ${tabCount}`);
 
-                                                                            
-                             
+  // The actual defect: does the element under each label's centre belong to
+  // that label's own button?
   const overlaps = await page.evaluate(() => {
     const bad = [];
     document.querySelectorAll('.dash-tab').forEach((tab) => {
@@ -82,7 +95,7 @@ const run = async () => {
   });
   check('every label sits inside its own button', overlaps.length === 0, JSON.stringify(overlaps));
 
-                                                                                 
+  // ---------------------------------------------------------------- 2. clicking
   console.log('\n2. CLICKING EVERY TAB');
   for (const tab of TABS) {
     await page.locator(`.dash-tab:has-text("${tab.label}")`).first().click();
@@ -100,7 +113,7 @@ const run = async () => {
     );
   }
 
-                                                                                   
+  // ---------------------------------------------------------------- 3. deep links
   console.log('\n3. DIRECT NAVIGATION (deep link to each tab)');
   for (const tab of TABS) {
     await page.goto(`${BASE}/#dashboard/${tab.id}`, { waitUntil: 'networkidle' });
@@ -113,7 +126,7 @@ const run = async () => {
     );
   }
 
-                                                                                
+  // ---------------------------------------------------------------- 4. refresh
   console.log('\n4. REFRESH ON EACH TAB');
   for (const tab of TABS) {
     await page.goto(`${BASE}/#dashboard/${tab.id}`, { waitUntil: 'networkidle' });
@@ -127,10 +140,10 @@ const run = async () => {
     );
   }
 
-                                                                                     
+  // ---------------------------------------------------------------- 5. back/forward
   console.log('\n5. BROWSER BACK / FORWARD');
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
-  await page.locator('nav .nav-cta').click();                                      
+  await page.locator('nav .nav-cta').click();               // landing -> dashboard
   await page.locator('.dash-tab:has-text("Simulation")').first().click();
   await page.locator('.dash-tab:has-text("Coach Chat")').first().click();
 
@@ -149,7 +162,7 @@ const run = async () => {
   check('forward -> Coach Chat', state.hash === '#dashboard/coach'
     && labelMatches(state.activeLabel, 'Coach Chat'), `hash=${state.hash} active=${state.activeLabel}`);
 
-                                                    
+  // back far enough to reach the landing view again
   for (let i = 0; i < 4; i += 1) {
     await page.goBack({ waitUntil: 'load' }).catch(() => {});
     await page.waitForTimeout(200);
@@ -158,7 +171,7 @@ const run = async () => {
   }
   check('back reaches the landing view', state.view === 'landing', `view=${state.view}`);
 
-                                                                             
+  // ---------------------------------------------------------------- 6. misc
   console.log('\n6. ROBUSTNESS');
   await page.goto(`${BASE}/#dashboard/not-a-real-tab`, { waitUntil: 'networkidle' });
   await page.waitForSelector('.dash-tab.is-active', { timeout: 8000 });

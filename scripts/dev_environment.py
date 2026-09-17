@@ -1,5 +1,21 @@
 """
 Prepare and verify a usable dev environment for every dashboard tab.
+
+    python -m scripts.dev_environment            # report only
+    python -m scripts.dev_environment --seed     # report + seed questionnaires
+
+Two jobs, deliberately kept in one place:
+
+1. REPORT what each of the eight tabs needs and whether it is actually
+   satisfied right now. Every check hits the real service or the real
+   database -- nothing here reports "ready" from configuration alone.
+
+2. SEED the two questionnaire tabs, which are the only ones that start
+   genuinely empty for a fresh player. Seeding goes through the HTTP API,
+   not through direct row inserts, so the scores are produced by the real
+   scoring engine. Inserting pre-computed rows would populate the screen
+   with numbers no engine ever calculated -- the exact failure mode the
+   rest of this project is built to avoid.
 """
 
 from __future__ import annotations
@@ -25,9 +41,18 @@ DEMO_PLAYER = "demo-player-1"
 OK, WARN, BAD = "  OK  ", " WARN ", " FAIL "
 
 
+# --------------------------------------------------------------------------
+# tiny HTTP helpers (stdlib only -- this script must run before anything else)
+# --------------------------------------------------------------------------
 
 def _get(url: str, timeout: float = 5.0, expect_json: bool = True):
-    """Returns (status, parsed_body_or_None)."""
+    """Returns (status, parsed_body_or_None).
+
+    expect_json=False matters for the Vite dev server, which serves HTML: a
+    JSON parse failure there would be reported as status 0 ("not running")
+    even though the server answered perfectly well. Reachability and payload
+    shape are two different questions and must not share one failure path.
+    """
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
             raw = response.read()
@@ -63,9 +88,17 @@ def _post(url: str, payload: dict, timeout: float = 30.0):
         return 0, None
 
 
+# --------------------------------------------------------------------------
+# database probes
+# --------------------------------------------------------------------------
 
 def best_match() -> dict | None:
-    """The match with the most computed metrics AND a video still on disk."""
+    """The match with the most computed metrics AND a video still on disk.
+
+    Both halves matter: metrics drive Player/Team/Simulation, and the video
+    file is what Calibration decodes a frame from. A match with one but not
+    the other leaves half the tabs empty.
+    """
     if not DB_PATH.exists():
         return None
 
@@ -99,7 +132,13 @@ def best_match() -> dict | None:
     return max(playable, key=lambda c: (c["player_metrics"] + c["team_metrics"], c["tracking_rows"]))
 
 
+# --------------------------------------------------------------------------
+# seeding
+# --------------------------------------------------------------------------
 
+# Three profiles rather than three copies of one answer set: a history where
+# every row is identical shows nothing about trend, which is the whole reason
+# the history view exists.
 HEALTH_PROFILES = [
     dict(sleep_duration_hours=8.5, sleep_quality=9, night_awakenings=0, trained_last_24h=False,
          trained_last_48h=True, training_duration_minutes=60, training_intensity=4,
@@ -145,6 +184,9 @@ def seed(player_id: str) -> None:
         ("psychology", PSYCH_PROFILES, f"/api/psychology/{player_id}/submit"),
     ):
         for index, profile in enumerate(profiles, start=1):
+            # match_id is deliberately omitted: these are pre-match
+            # self-reports, and the endpoint rejects a dangling match
+            # reference. "No match yet" is a valid, honest state here.
             status, body = _post(f"{BACKEND}{path}", dict(profile))
             if status == 201:
                 if label == "health":
@@ -157,6 +199,9 @@ def seed(player_id: str) -> None:
                 print(f"  {BAD} {label} #{index}: HTTP {status} {detail}")
 
 
+# --------------------------------------------------------------------------
+# report
+# --------------------------------------------------------------------------
 
 def redis_alive(host: str = "127.0.0.1", port: int = 6379) -> bool:
     """Raw PING over a socket — no redis-py needed, and it proves the server
@@ -172,7 +217,12 @@ def redis_alive(host: str = "127.0.0.1", port: int = 6379) -> bool:
 
 
 def celery_worker_alive() -> bool | None:
-    """True/False when celery is importable, None when it is not."""
+    """True/False when celery is importable, None when it is not.
+
+    None is reported honestly as "unknown" rather than as "down": this
+    script must stay runnable outside the venv, and "we could not check"
+    is different information from "we checked and nothing is there".
+    """
     try:
         from backend.celery_app import celery_app
     except Exception:

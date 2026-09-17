@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 
 from nexus.api.schemas import HealthAnalysisResponse, HealthPatternSchema, HealthScorecardResponse
+from nexus.api.services import get_services
 from nexus.health.analyzer import HealthAnalysis, HealthAnalyzer
 from nexus.health.safety import MEDICAL_DISCLAIMER
 
@@ -32,13 +33,13 @@ def _to_response(analysis: HealthAnalysis) -> HealthAnalysisResponse:
 
 @router.get("/health-intel/{user_id}/analysis", response_model=HealthAnalysisResponse)
 async def get_health_analysis(user_id: str, request: Request) -> HealthAnalysisResponse:
-    analyzer: HealthAnalyzer = request.app.state.health_analyzer
+    analyzer: HealthAnalyzer = get_services(request).health_analyzer
     return _to_response(await analyzer.analyze(user_id))
 
 
 @router.get("/health-intel/{user_id}/scorecard", response_model=HealthScorecardResponse)
 async def get_health_scorecard(user_id: str, request: Request) -> HealthScorecardResponse:
-    analyzer: HealthAnalyzer = request.app.state.health_analyzer
+    analyzer: HealthAnalyzer = get_services(request).health_analyzer
     analysis = await analyzer.analyze(user_id)
     return HealthScorecardResponse(
         user_id=analysis.user_id,

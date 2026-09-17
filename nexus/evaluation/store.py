@@ -73,6 +73,12 @@ class EvalStore:
 
         by_suite: dict[str, list[CaseOutcome]] = {}
         for row in case_rows:
+            # `actual` (the detailed structured output) is deliberately
+            # NOT part of EvalCaseRecord's columns — only the scored
+            # summary fields round-trip through storage; a live run's
+            # in-memory EvalRun carries the full detail, a reloaded one
+            # carries the scoring history, which is what regression
+            # comparison actually needs.
             by_suite.setdefault(row.suite, []).append(
                 CaseOutcome(
                     case_id=row.case_id, passed=row.passed, score=row.score, actual={},
@@ -88,6 +94,8 @@ class EvalStore:
             suites=suites,
             config_snapshot=json.loads(run_row.config_json),
             git_sha=run_row.git_sha or None,
+            # Rows predating the column read back as NULL; "unknown" is the
+            # honest label, and compare_runs() refuses to diff it.
             provider_mode=run_row.provider_mode or "unknown",
             pinned_model_id=run_row.pinned_model_id or None,
         )
@@ -108,7 +116,14 @@ class EvalStore:
         return None
 
     async def latest_run_for_provider_mode(self, provider_mode: str) -> EvalRun | None:
-        """Newest run recorded in the SAME provider mode, or None."""
+        """Newest run recorded in the SAME provider mode, or None.
+
+        Separate from latest_run() because a regression comparison is only
+        meaningful within one mode — see compare_runs(), which refuses
+        across them. "unknown" never matches, including another "unknown":
+        two untagged runs may have come from different modes, and pairing
+        them would rebuild exactly the false comparison this avoids.
+        """
         if provider_mode == "unknown":
             return None
         async with self._session_factory() as db:

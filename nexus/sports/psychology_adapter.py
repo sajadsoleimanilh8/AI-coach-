@@ -1,5 +1,25 @@
 """
 Mental-readiness assessments, read from the football backend over HTTP.
+
+Same integration seam and the same rules as HttpSportsDataAdapter in
+nexus/sports/adapter.py and PreMatchHealthClient in
+nexus/sports/prematch_health.py: nexus/ never imports backend/'s models or
+ai/'s scoring code and never touches the football database, so the two
+codebases stay independently deployable and this can point at a remote
+backend. A connection failure or a 5xx raises ProviderUnavailableError -- it
+never degrades into a guessed or default assessment, because a fabricated
+readiness number is worse than no number.
+
+A 404 is different from an outage and is treated as such: it means this player
+has not submitted a questionnaire yet, which is normal state, not a backend
+failure.
+
+Nothing here computes or adjusts a score. Every number in PsychologyAssessment
+is copied verbatim from what the backend already computed deterministically in
+ai/psychology_ai/.
+
+This is a mental-READINESS estimate from a self-report. Not emotion detection,
+not a psychological or clinical assessment, not a diagnosis.
 """
 
 from __future__ import annotations
@@ -14,28 +34,36 @@ from nexus.core.exceptions import ProviderUnavailableError
 
 @dataclass(frozen=True)
 class PsychologyAssessment:
-    """The backend's assessment contract, carried through unchanged."""
+    """The backend's assessment contract, carried through unchanged.
+
+    Deliberately a plain carrier: no derived properties, no recomputation, no
+    "helpful" rounding. If a field is wrong, it was wrong upstream, and that is
+    where it should be fixed.
+    """
 
     player_id: str
     match_id: str | None
     mental_readiness: int
     focus: int
     confidence: int
-    stress: int
+    stress: int  # higher = more reported stress, unlike the three above
     pressure_risk: str
     mental_performance_risk: str
+    # dimension -> "positive" | "neutral" | "negative"
     factors: dict[str, str]
     method: str
     confidence_level: str
     schema_version: str
     computed_at: str
     data_source: str = "self_reported"
+    # Explicitly-labelled CV-derived corroboration, when the submission
+    # supplied a cv_player_id. Empty in the common case.
     historical_context: list[str] = field(default_factory=list)
     disclaimer: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_json(cls, payload: dict[str, Any]) -> "PsychologyAssessment":
+    def from_json(cls, payload: dict[str, Any]) -> PsychologyAssessment:
         return cls(
             player_id=payload["player_id"],
             match_id=payload.get("match_id"),
@@ -69,7 +97,7 @@ class PsychologyClient:
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
-        self._transport = transport
+        self._transport = transport  # test seam: inject httpx.MockTransport
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
@@ -79,7 +107,12 @@ class PsychologyClient:
         )
 
     async def _get(self, path: str, params: dict | None = None) -> dict[str, Any] | None:
-        """Returns the parsed body, or None on a 404."""
+        """Returns the parsed body, or None on a 404.
+
+        Raises ProviderUnavailableError for anything else -- connection
+        refused, timeout, 5xx. The caller must never receive a substituted
+        value on failure.
+        """
         async with self._client() as client:
             try:
                 response = await client.get(path, params=params)

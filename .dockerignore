@@ -1,0 +1,40 @@
+# Build context for backend/Dockerfile and nexus/Dockerfile. Without this file
+# every build uploaded venv/ (~1 GB), datasets, model weights, sample videos
+# and runs/ to the Docker daemon before a single layer was built.
+venv/
+.venv/
+**/__pycache__/
+**/*.pyc
+.git/
+.github/
+.claude/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Data and artefacts: mounted at runtime, never baked into an image.
+datasets/
+models/
+runs/
+samples/
+videos/
+storage/
+calibrations/
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.mp4
+*.webm
+*.db
+*.sqlite*
+nexus/data/
+nexus/training/output*/
+
+# Frontend is built and served separately.
+frontend/
+
+# Local secrets.
+.env
+**/.env
+!**/.env.example

@@ -17,7 +17,7 @@ _DAY = 86400.0
 
 async def _make_engine(tmp_path):
     async_engine = create_async_db_engine(str(tmp_path / "nexus.db"))
-    await init_db(async_engine)
+    await init_db(async_engine)  # BaselineCalculator has no init() of its own — read-only
     return async_engine
 
 
@@ -49,7 +49,10 @@ async def test_baseline_excludes_the_recent_window(tmp_path) -> None:
     async_engine = await _make_engine(tmp_path)
     calculator = _calculator(async_engine, recent_window_days=14.0, min_samples=1)
 
+    # Inside the last 14 days — must NOT count toward the baseline, or
+    # "current" would be compared against itself.
     await _insert_raw(async_engine, user_id="u1", dimension="physical.energy", value=0.9, age_days=1.0)
+    # Outside the recent window, inside the 90-day baseline window.
     await _insert_raw(async_engine, user_id="u1", dimension="physical.energy", value=0.3, age_days=20.0)
 
     baselines = await calculator.get_baselines("u1")
@@ -64,6 +67,7 @@ async def test_baseline_excludes_signals_older_than_the_window(tmp_path) -> None
     calculator = _calculator(async_engine, window_days=90.0, recent_window_days=14.0, min_samples=1)
 
     await _insert_raw(async_engine, user_id="u1", dimension="physical.energy", value=0.3, age_days=20.0)
+    # Older than the 90-day window entirely.
     await _insert_raw(async_engine, user_id="u1", dimension="physical.energy", value=0.9, age_days=200.0)
 
     baselines = await calculator.get_baselines("u1")

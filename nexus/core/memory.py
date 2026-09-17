@@ -6,7 +6,13 @@ from nexus.core.types import Message
 
 
 class MemoryStore(ABC):
-    """Common interface for conversation memory backends."""
+    """Common interface for conversation memory backends.
+
+    Phase 1 ships a single SQLite-backed implementation
+    (`nexus.memory.short_term.ShortTermMemoryStore`); this interface exists so
+    it can later be swapped for a Postgres- or Redis-backed store, or for the
+    long-term/episodic/semantic layers, without touching callers.
+    """
 
     @abstractmethod
     async def create_session(self) -> str:

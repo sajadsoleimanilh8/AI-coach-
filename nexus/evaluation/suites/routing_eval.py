@@ -14,6 +14,9 @@ class RoutingEvaluator(Evaluator):
 
     suite = "routing"
 
+    # Explicitly False: this suite's entire purpose is to assert which
+    # model routing CHOOSES. Pinning a model would force the answer it is
+    # supposed to be checking, turning every case into a tautology.
     supports_model_pinning = False
 
     async def run_case(self, case: EvalCase, harness: EvalHarness) -> CaseOutcome:

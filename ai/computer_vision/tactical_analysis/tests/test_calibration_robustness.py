@@ -1,5 +1,17 @@
 """
 The gates added when the 0/3300-valid calibration failure was investigated.
+
+WHAT THESE PIN, AND WHAT THEY DELIBERATELY DO NOT CLAIM
+    Each test below pins one mechanism: preprocessing parity, RANSAC
+    consensus accounting, the consensus gates, geometric plausibility, the
+    bounded temporal fallback, and geometry-preserving smoothing.
+
+    None of them claims the automatic calibration is ACCURATE on
+    out-of-domain footage. It is not -- see the WHAT REMAINS BROKEN note in
+    auto_calibration.py, which records that fits scoring 8/8 inliers at
+    0.31 m reprojection error were still metres wrong when rendered against
+    the painted pitch lines. These tests pin that the machinery behaves as
+    documented, not that the model is good enough.
 """
 from __future__ import annotations
 
@@ -42,6 +54,9 @@ def _broadcast_h():
     return H, pixel
 
 
+# ----------------------------------------------------------------------
+# Preprocessing parity -- the root cause of the 0/3300 failure
+# ----------------------------------------------------------------------
 
 def test_stretch_square_reshapes_and_reports_the_inverse_scale():
     """The mapping back to original pixels must be exact, or every keypoint
@@ -53,6 +68,8 @@ def test_stretch_square_reshapes_and_reports_the_inverse_scale():
     assert sx == pytest.approx(1280 / 960)
     assert sy == pytest.approx(720 / 960)
 
+    # A keypoint at the centre of the square image must map back to the
+    # centre of the original frame.
     assert (480 * sx, 480 * sy) == pytest.approx((640.0, 360.0))
 
 
@@ -91,8 +108,8 @@ class _FakeResult:
 
 def test_extract_keypoints_maps_back_to_original_frame_pixels():
     kp = np.zeros((1, 32, 3), dtype=np.float64)
-    kp[0, 0] = (480.0, 480.0, 0.9)
-    kp[0, 1] = (0.0, 0.0, 0.9)
+    kp[0, 0] = (480.0, 480.0, 0.9)      # centre of a 960x960 square image
+    kp[0, 1] = (0.0, 0.0, 0.9)          # ultralytics' "absent landmark"
     result = _FakeResult([0.9], kp)
 
     keypoints, confidences, det_conf = extract_keypoints(
@@ -104,6 +121,9 @@ def test_extract_keypoints_maps_back_to_original_frame_pixels():
     assert confidences[0] == pytest.approx(0.9)
 
 
+# ----------------------------------------------------------------------
+# RANSAC consensus accounting
+# ----------------------------------------------------------------------
 
 def test_ransac_reports_inliers_and_scores_confidence_on_the_consensus():
     """One gross outlier must not drag the reported confidence, but it must
@@ -114,7 +134,7 @@ def test_ransac_reports_inliers_and_scores_confidence_on_the_consensus():
                       [52.5, 5.0], [52.5, 63.0], [30.0, 34.0], [75.0, 34.0]])
     pixel = cv2.perspectiveTransform(
         pitch.reshape(-1, 1, 2).astype(np.float64), inv).reshape(-1, 2)
-    pixel[0] += 400.0
+    pixel[0] += 400.0                     # one badly mislocalised landmark
 
     res = compute_homography(pixel, pitch, method=cv2.RANSAC,
                              ransac_reproj_threshold=2.0)
@@ -122,7 +142,9 @@ def test_ransac_reports_inliers_and_scores_confidence_on_the_consensus():
     assert res.n_inliers is not None and res.n_inliers >= 6
     assert res.inlier_ratio == pytest.approx(res.n_inliers / res.n_points)
     assert len(res.inlier_mask) == res.n_points
+    # The outlier is still reported in the all-point error...
     assert res.reprojection_error_m > res.inlier_reprojection_error_m
+    # ...while confidence describes the matrix that was actually returned.
     assert res.confidence > 0.9
 
 
@@ -168,6 +190,9 @@ def test_consensus_gate_is_skipped_when_ransac_did_not_run():
     assert state.valid, f"unexpectedly rejected: {state.invalid_reason}"
 
 
+# ----------------------------------------------------------------------
+# Geometric plausibility
+# ----------------------------------------------------------------------
 
 def test_a_plausible_broadcast_homography_has_no_geometry_problems():
     H, pixel = _broadcast_h()
@@ -214,6 +239,9 @@ def test_geometry_gate_runs_after_the_evidence_gates():
     assert "spread" in (state.invalid_reason or "").lower(), state.invalid_reason
 
 
+# ----------------------------------------------------------------------
+# Geometry-preserving smoothing
+# ----------------------------------------------------------------------
 
 def test_blend_stays_a_valid_projective_transform():
     """The reason this exists instead of averaging the matrices."""
@@ -248,6 +276,9 @@ def test_blend_weight_is_clamped_not_extrapolated():
     assert np.allclose(blend_homographies(H_a, H_b, FRAME_SIZE, -5.0), H_a)
 
 
+# ----------------------------------------------------------------------
+# Bounded temporal fallback
+# ----------------------------------------------------------------------
 
 class _StubCalibrator(AutoCalibrator):
     """AutoCalibrator with the model and the motion detector stubbed out, so
@@ -305,7 +336,7 @@ def test_carried_calibration_decays_and_then_expires():
 def test_fallback_expires_early_when_decay_crosses_the_confidence_gate():
     """Weaker evidence must survive fewer frames than strong evidence."""
     cal = _StubCalibrator(max_fallback_frames=1000, fallback_decay=0.5)
-    cal.stable.confidence = 0.62
+    cal.stable.confidence = 0.62          # only just above the 0.6 gate
     camera = CameraState(motion=CameraMotion.static)
 
     state, _ = cal._carry(camera, 1)

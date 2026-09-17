@@ -104,6 +104,7 @@ def _context(goal: str = "Do two things.") -> AgentContext:
     )
 
 
+# --- DelegationGuard: the caps themselves ---------------------------------
 
 
 def test_guard_allows_delegation_within_every_cap() -> None:
@@ -121,7 +122,7 @@ def test_guard_enforces_max_depth() -> None:
 
     assert refusal is not None
     assert "max_depth=2" in refusal
-    assert "Synthesize" in refusal
+    assert "Synthesize" in refusal  # tells the orchestrator what to do next
 
 
 def test_guard_enforces_max_total_delegations() -> None:
@@ -162,11 +163,12 @@ def test_guard_allows_the_same_sub_goal_to_a_different_agent() -> None:
 def test_a_refused_delegation_does_not_consume_budget() -> None:
     guard = DelegationGuard(max_total_delegations=3)
     guard.try_acquire(agent_name="research", sub_goal="a", depth=1)
-    guard.try_acquire(agent_name="research", sub_goal="a", depth=1)
+    guard.try_acquire(agent_name="research", sub_goal="a", depth=1)  # refused repeat
 
     assert guard.total_delegations == 1
 
 
+# --- The orchestrator running through the real runtime --------------------
 
 
 @pytest.mark.asyncio
@@ -174,7 +176,7 @@ async def test_orchestrator_decomposes_and_delegates() -> None:
     provider = _ScriptedProvider(
         [
             _delegate_call("research", "Find the cause", "1"),
-            _plain("The cause was a removed cache."),
+            _plain("The cause was a removed cache."),  # specialist's answer
             _delegate_call("coding", "Write the fix", "2"),
             _plain("Patch written."),
             _plain("Synthesized: the cache was removed; a patch restores it."),
@@ -269,5 +271,6 @@ async def test_non_delegating_agents_get_the_shared_registry_untouched() -> None
 
     result = await runtime.run(_SpecialistAgent(), _context())
 
+    # No delegate tool, no delegation steps, nothing changed for a plain agent.
     assert result.delegation_steps == []
     assert result.final_answer == "Answer."

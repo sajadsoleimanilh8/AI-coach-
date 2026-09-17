@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -17,6 +18,9 @@ from nexus.models.registry import get_model
 
 logger = get_logger("models.local.ollama")
 
+# Ollama has no public tokenizer endpoint that is consistent across model
+# families, so token counts are estimated with the common ~4 chars/token
+# heuristic. This is an approximation, not an exact count.
 _CHARS_PER_TOKEN_ESTIMATE = 4
 
 
@@ -34,7 +38,7 @@ class OllamaRuntime(AIProvider):
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
-        self._transport = transport
+        self._transport = transport  # test seam: inject httpx.MockTransport
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
@@ -74,6 +78,12 @@ class OllamaRuntime(AIProvider):
         max_tokens: int | None = None,
         tools: list[dict[str, Any]] | None = None,
     ) -> GenerationResult:
+        # `tools` is accepted (not rejected) but deliberately ignored: most
+        # local models served via Ollama don't reliably support structured
+        # tool calling, so silently dropping it here — rather than
+        # forwarding a param the backend doesn't understand — is safer
+        # than a confusing runtime error. GenerationResult.tool_calls is
+        # always None from this provider by design.
         self._check_context_window(messages, model_id)
         payload = {
             "model": model_id,
@@ -123,6 +133,7 @@ class OllamaRuntime(AIProvider):
         max_tokens: int | None = None,
         tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[GenerationChunk]:
+        # See generate() above: tools is accepted but always ignored here.
         self._check_context_window(messages, model_id)
         payload = {
             "model": model_id,

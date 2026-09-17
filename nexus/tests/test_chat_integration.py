@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -60,11 +60,16 @@ async def client(_memory_db_env: str) -> AsyncIterator[AsyncClient]:
     app = create_app()
 
     async with app.router.lifespan_context(app):
+        # FakeProvider registered under the "local" key so it's what
+        # requesting the real registry's "mistral:7b" (provider: local)
+        # resolves to, and so it's the only chat candidate the router sees
+        # (no openai/anthropic keys are registered in this fixture) —
+        # matching Phase 1's local-only test setup without a running Ollama.
         fake_provider = FakeProvider()
         provider_manager = ProviderManager({"local": fake_provider})
-        app.state.provider_manager = provider_manager
-        app.state.provider = fake_provider
-        app.state.router = ModelRouter(provider_manager, list_models())
+        app.state.services.provider_manager = provider_manager
+        app.state.services.provider = fake_provider
+        app.state.services.router = ModelRouter(provider_manager, list_models())
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:

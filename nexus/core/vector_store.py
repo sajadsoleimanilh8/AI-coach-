@@ -9,12 +9,18 @@ class RetrievedChunk:
     doc_id: str
     source_name: str
     chunk_text: str
-    score: float
-    cosine_score: float
+    score: float  # final blended score after reranking
+    cosine_score: float  # raw similarity, kept for explainability
 
 
 class VectorStore(ABC):
-    """Common interface for chunk storage + nearest-neighbor search."""
+    """Common interface for chunk storage + nearest-neighbor search.
+
+    Mirrors `MemoryStore`'s pattern: callers depend only on this ABC, so
+    today's brute-force SQLite implementation can be swapped for a real
+    vector DB (FAISS, pgvector, ...) later without touching RagService or
+    chat.py.
+    """
 
     @abstractmethod
     async def add_chunks(

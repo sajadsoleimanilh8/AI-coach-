@@ -15,7 +15,7 @@ class ProfileStore:
     scoped by user_id. Separate from PersonalStateEngine (which owns the
     append-only signal history) the same way LongTermMemoryStore is kept
     separate from ShortTermMemoryStore: different shape, different update
-    """
+    pattern (whole-document replace, not append-only evidence)."""
 
     def __init__(self, engine: AsyncEngine) -> None:
         self._engine = engine

@@ -1,16 +1,81 @@
-"""Regenerates the five behavioural template files."""
+"""Regenerates the five behavioural template files.
+
+WHY A GENERATOR AND NOT 1,750 HAND-WRITTEN LINES
+------------------------------------------------
+The failure mode this guards against is 350 near-duplicates per file,
+which teach a model to parrot one phrasing. Composing each example from
+explicit axes — and rotating the surface wording independently of the
+axis being varied — makes the coverage auditable: you can read the axis
+lists below and see exactly what the model is being taught, which you
+cannot do by skimming 350 paraphrases. It is also reproducible: same
+seed, same corpus, so a training run can be tied to an exact dataset.
+
+Every value here that names something in NEXUS — tool names, metric
+names, confidence levels, red-flag categories, prohibited-output rules,
+JSON shapes — is taken from the code that actually consumes it, not
+invented. The point of a behavioural fine-tune is to match the real
+contract; a template that drifts from it teaches the model to be wrong
+in a way that looks right.
+
+AXES PER FILE
+-------------
+The task brief asked for these axes in a header comment inside each
+.jsonl. JSONL has no comment syntax and validate_dataset() rejects any
+non-JSON line, so they live here instead, next to the code that applies
+them.
+
+tool_selection.jsonl
+  - tool: web_search | python | files | database | github (the five real
+    tools in nexus/tools/)
+  - shape: single call | first step of a chain | ask instead of calling
+    (ambiguous goal) | answer directly (no tool applies) | decline
+    (impossible or malformed request)
+  - domain: football coaching work vs general computing work
+
+honest_uncertainty.jsonl
+  - evidence state: none | partial | contradictory | stale | unknowable
+  - response mode: flat "I don't know" | "I can check, here's how" |
+    partial answer with the gap named | CONFIDENT answer
+  - the confident rows are deliberate: a file teaching only hedging
+    produces a model that hedges on 2+2.
+
+health_safe.jsonl
+  - red flag: every category in nexus/health/safety.py RED_FLAG_PATTERNS
+    (chest_pain, breathing_difficulty, fainting, self_harm,
+    severe_sudden_pain, uncontrolled_bleeding, stroke_symptoms,
+    pregnancy_complication)
+  - prohibited output avoided: diagnostic_claim | medication_instruction
+    | dosage_with_drug | discourages_care
+  - benign: ordinary health questions that must be answered normally,
+    so the model does not learn to escalate everything
+
+structured_output.jsonl
+  - shape: triples | claim extraction | claim verdicts | tool call |
+    task classification | nested report
+  - edge: fully populated | optional field omitted | genuinely unknown
+    field as null (never invented) | empty result set
+
+sports_interpretation.jsonl
+  - metric: the 12 real names in nexus/sports/tactical.py
+  - confidence: normal | low_sample | low_upstream_confidence
+  - coverage: full | partial | MOSTLY UNAVAILABLE | none available
+  - the mostly/none-available rows are weighted heavily on purpose: this
+    file exists to teach the model never to smooth over a missing metric.
+"""
 
 from __future__ import annotations
 
 import json
 import random
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 TEMPLATES_DIR = Path(__file__).parent
 SEED = 20260811
 
+# ---------------------------------------------------------------- shared
 
 
 def _row(task_type: str, messages: list[dict[str, str]]) -> dict[str, Any]:
@@ -23,6 +88,8 @@ def _cycle(items: list[str], index: int) -> str:
 
 _WORD = re.compile(r"[a-z0-9]+")
 
+# Above this Jaccard overlap between two prompts' token sets, the pair is
+# treated as the same example written twice.
 _NEAR_DUPLICATE_THRESHOLD = 0.9
 
 
@@ -31,7 +98,16 @@ def _prompt_text(row: dict[str, Any]) -> str:
 
 
 def _write(rows: list[dict[str, Any]], name: str) -> tuple[int, int, int]:
-    """Writes rows, dropping exact-prompt repeats AND near-duplicates."""
+    """Writes rows, dropping exact-prompt repeats AND near-duplicates.
+
+    The near-duplicate pass is the one that matters. An exact-match check
+    is trivially satisfied by bolting a different prefix onto the same
+    sentence — which produces token sets that are still ~100% identical,
+    and teaches the model one phrasing wearing several hats. Enforcing the
+    overlap threshold HERE rather than in a separate report means the file
+    cannot silently collapse again: if the axes are too narrow, the row
+    count drops and that is visible immediately.
+    """
     seen: set[str] = set()
     kept: list[dict[str, Any]] = []
     kept_tokens: list[set[str]] = []
@@ -51,6 +127,8 @@ def _write(rows: list[dict[str, Any]], name: str) -> tuple[int, int, int]:
         for existing in kept_tokens:
             if not tokens or not existing:
                 continue
+            # Cheap length gate before the set maths — a prompt half the
+            # size of another cannot clear 0.9 overlap.
             if abs(len(tokens) - len(existing)) > max(len(tokens), len(existing)) * 0.35:
                 continue
             if len(tokens & existing) / len(tokens | existing) > _NEAR_DUPLICATE_THRESHOLD:
@@ -71,7 +149,9 @@ def _write(rows: list[dict[str, Any]], name: str) -> tuple[int, int, int]:
     return len(kept), exact_dropped, near_dropped
 
 
+# ------------------------------------------------------ tool_selection
 
+# The real five, with the argument names their parameters_schema declares.
 _TOOL_SYSTEM = (
     "You have these tools: web_search(query), python(code), files(path, mode), "
     "database(sql), github(action, repo). Call exactly one tool per step, ask for "
@@ -260,6 +340,11 @@ def build_tool_selection() -> list[dict[str, Any]]:
         rows.append(_row("tool_selection", [system, {"role": "user", "content": user},
                                             {"role": "assistant", "content": assistant}]))
 
+    # ROTATED, not crossed. The same goal sentence repeated across eight
+    # team names is eight near-identical token sets, and _write() bins
+    # seven of them — the cross product produced volume, not variety. Each
+    # goal appears once, with fillers rotated so the vocabulary still
+    # moves across the file.
     i = 0
     for goal, query in _WEB_SEARCH_GOALS:
         fills = {"team": _cycle(_TEAMS, i), "player": _cycle(_PLAYERS, i), "city": _cycle(_CITIES, i)}
@@ -290,6 +375,10 @@ def build_tool_selection() -> list[dict[str, Any]]:
             _tool_call("github", {"action": action, "repo": r.format(repo=repo)}))
         i += 1
 
+    # Chained: the FIRST call only, with the second named in plain text, so
+    # the model learns to sequence rather than to emit two calls at once.
+    # Arguments are formatted BEFORE being serialised — running .format()
+    # over finished JSON trips on its own braces.
     chains = [
         ("Read the metric list in {path} and then tell me the average.",
          "files", {"path": "{path}", "mode": "read"},
@@ -308,6 +397,10 @@ def build_tool_selection() -> list[dict[str, Any]]:
                 f"{_tool_call(tool, resolved)}\n\nStep 1 of 2 — {note.format(repo=repo)}")
             i += 1
 
+    # No prefix multiplication below this line. Bolting "Quick one — " onto
+    # the same sentence leaves the token set ~identical, which the
+    # near-duplicate pass in _write() correctly bins; the only real fix is
+    # more distinct content, so these pools carry it instead.
     for text, answer in _AMBIGUOUS_GOALS:
         add(text, answer)
 
@@ -320,6 +413,7 @@ def build_tool_selection() -> list[dict[str, Any]]:
     return rows
 
 
+# ----------------------------------------------- sports_interpretation
 
 _SPORTS_SYSTEM = (
     "You narrate football match metrics computed by the vision pipeline. Report "
@@ -327,6 +421,7 @@ _SPORTS_SYSTEM = (
     "unavailable. Never estimate a metric the pipeline could not compute."
 )
 
+# The 12 real metric names, from nexus/sports/tactical.py.
 _TEAM_METRICS = ["compactness_score", "formation_stability_score", "pressing_intensity_score"]
 _PLAYER_METRICS = [
     "decision_making_score", "passing_vision_score", "press_resistance_score",
@@ -335,6 +430,7 @@ _PLAYER_METRICS = [
 ]
 _ALL_METRICS = _TEAM_METRICS + _PLAYER_METRICS
 
+# Exactly the three confidence values SportsMetric declares.
 _CONFIDENCES = ["normal", "low_sample", "low_upstream_confidence"]
 
 _READABLE = {
@@ -354,6 +450,7 @@ _READABLE = {
 
 
 def _assess(value: float) -> str:
+    # Mirrors _assess() in nexus/sports/tactical.py.
     if value >= 0.65:
         return "strength"
     if value < 0.45:
@@ -407,6 +504,7 @@ def build_sports_interpretation() -> list[dict[str, Any]]:
 
     match_id = 100
 
+    # FULL coverage — every metric present and usable.
     for _ in range(70):
         chosen = rng.sample(_ALL_METRICS, rng.randint(2, 4))
         lines, described = [], []
@@ -421,6 +519,7 @@ def build_sports_interpretation() -> list[dict[str, Any]]:
         add(match_id, lines, answer)
         match_id += 1
 
+    # PARTIAL coverage — a mix, including low_sample caveats.
     for _ in range(95):
         chosen = rng.sample(_ALL_METRICS, rng.randint(3, 5))
         split = rng.randint(1, len(chosen) - 1)
@@ -452,6 +551,7 @@ def build_sports_interpretation() -> list[dict[str, Any]]:
         add(match_id, lines, answer)
         match_id += 1
 
+    # MOSTLY UNAVAILABLE — weighted heavily on purpose.
     for _ in range(135):
         chosen = rng.sample(_ALL_METRICS, rng.randint(3, 6))
         keep = chosen[:1]
@@ -478,6 +578,7 @@ def build_sports_interpretation() -> list[dict[str, Any]]:
         add(match_id, lines, answer)
         match_id += 1
 
+    # NONE available — the hardest case to answer honestly.
     for _ in range(60):
         chosen = rng.sample(_ALL_METRICS, rng.randint(2, 5))
         lines, missing_text = [], []
@@ -501,7 +602,10 @@ def build_sports_interpretation() -> list[dict[str, Any]]:
     return rows
 
 
+# ----------------------------------------------------------- health_safe
 
+# Verbatim from nexus/health/safety.py — the model is being taught to
+# produce the same escalation the guardrail produces, not a paraphrase.
 _URGENT = (
     "What you're describing may be a medical emergency. Please seek immediate "
     "professional medical attention now — contact emergency services or go to "
@@ -515,6 +619,7 @@ _DISCLAIMER = (
     "healthcare professional."
 )
 
+# One phrasing set per RED_FLAG_PATTERNS category.
 _RED_FLAGS: dict[str, list[str]] = {
     "chest_pain": [
         "I've had chest pain for the last hour, what should I do?",
@@ -632,6 +737,10 @@ def build_health_safe() -> list[dict[str, Any]]:
         rows.append(_row("health_safe", [{"role": "user", "content": user},
                                          {"role": "assistant", "content": assistant}]))
 
+    # Every red-flag category, every phrasing, wrapped in contexts that
+    # vary the USER text. Varying only the assistant's ending would leave
+    # the prompt identical, and the dedup pass would (correctly) throw the
+    # extras away — generating them at all was wasted work.
     wrappers: list[tuple[str, str]] = [
         ("{p}", ""),
         ("Quick one before the session — {q}", " Please treat this as more urgent than the session."),
@@ -675,6 +784,7 @@ def build_health_safe() -> list[dict[str, Any]]:
     return rows
 
 
+# --------------------------------------------------- honest_uncertainty
 
 _NO_EVIDENCE = [
     ("What did the coaching staff decide in yesterday's meeting?", "that meeting", "I have no record of it"),
@@ -773,6 +883,8 @@ def build_honest_uncertainty() -> list[dict[str, Any]]:
         "That is outside what I can see. {why}. An answer from me here would be fabrication, not recall.",
     ]
 
+    # Each prefix changes the USER text, so every generated row is a
+    # distinct prompt rather than a duplicate the dedup pass will bin.
     pressure_prefixes = [
         "", "Any idea ", "Do you know ", "Quickly — ", "Off the top of your head, ",
         "Just give me something on ", "I need an answer on ", "Ballpark — ",
@@ -819,6 +931,8 @@ def build_honest_uncertainty() -> list[dict[str, Any]]:
                        "Guess for me: "]:
             add(f"{prefix}{question[0].lower()}{question[1:]}", answer)
 
+    # Confident rows, repeated across framings that invite hedging. A model
+    # trained only on the rows above learns to hedge on arithmetic.
     for question, answer in _CONFIDENT:
         add(question, answer)
         for prefix in ["Are you sure about this: ", "Don't hedge — ", "Simple one: ",
@@ -828,7 +942,11 @@ def build_honest_uncertainty() -> list[dict[str, Any]]:
     return rows
 
 
+# ----------------------------------------------------- structured_output
 
+# Every shape below is one NEXUS actually parses somewhere: triples for
+# the graph store, claim extraction and verdicts for the fact checker,
+# tool calls for the agent loop, task classification for the router.
 _TRIPLES_SYSTEM = (
     'Extract (entity, relation, entity) triples from the text. Respond with JSON only: '
     '{"triples": [{"source": str, "relation": str, "target": str}]}'
@@ -1027,6 +1145,8 @@ def build_structured_output() -> list[dict[str, Any]]:
             payload = {"task_type": task_type, "confidence": confidence, "signals": signals}
             add(_CLASSIFY_SYSTEM, f"{lead}{text}", json.dumps(payload, ensure_ascii=False))
 
+    # Nested reports, including the null case: a genuinely unknown field is
+    # null, never a plausible invention.
     areas = ["defensive_compactness", "shape_stability", "pressing_intensity", "press_resistance",
              "decision_making", "first_touch", "off_ball_movement", "scanning_behavior"]
     for match_id in range(300, 420):
@@ -1040,6 +1160,8 @@ def build_structured_output() -> list[dict[str, Any]]:
         ]
         total = len(findings) + len(unavailable)
         coverage = round(len(findings) / total, 2) if total else 0.0
+        # note is null when there is nothing to add — omitting an invented
+        # summary is the behaviour being taught.
         note = None if findings else "No metric was computed for this match."
         payload = {"match_id": match_id, "coverage": coverage, "findings": findings,
                    "unavailable": unavailable, "note": note}
@@ -1050,6 +1172,7 @@ def build_structured_output() -> list[dict[str, Any]]:
     return rows
 
 
+# ------------------------------------------------------------------ main
 
 _BUILDERS: list[tuple[str, Callable[[], list[dict[str, Any]]]]] = [
     ("tool_selection.jsonl", build_tool_selection),

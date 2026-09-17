@@ -1,4 +1,27 @@
-"""End-to-end pipeline validation on real broadcast clips."""
+"""End-to-end pipeline validation on real broadcast clips.
+
+Runs `run_pipeline()` -- the real production entry point, not a
+reimplementation -- over N real clips from storage/uploads and reports what
+each stage actually produced.
+
+WHY IT TRIMS THE CLIPS
+    The installed torch in this environment is CPU-only (2.13.0+cpu). A
+    full clip is several thousand frames through five models; the point of
+    this script is to exercise every stage on real footage, and a trimmed
+    prefix does that identically. Frame counts are reported so nothing is
+    implied about what was not run. `--frames 0` runs the whole clip.
+
+WHAT IT DOES NOT DO
+    It does not lower `HOMOGRAPHY_CONFIDENCE_MIN`, touch
+    `compute_homography()`'s all-point reprojection scoring, or otherwise
+    make calibration look better than it is. On real broadcast footage
+    `calibration_valid_fraction` is expected to be 0.0, and the purpose
+    here is to confirm every downstream stage DEGRADES CORRECTLY when it
+    is, not to make it non-zero.
+
+Usage
+    python -m scripts.validate_pipeline_e2e --clips 3 --frames 140
+"""
 from __future__ import annotations
 
 import argparse
@@ -10,15 +33,20 @@ import traceback
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 UPLOAD_DIR = REPO_ROOT / "storage" / "uploads"
 
 
 def trim_clip(src: Path, dst: Path, n_frames: int,
               start_frame: int = 0) -> tuple[int, float, tuple[int, int]]:
-    """Copies `n_frames` frames of `src` starting at `start_frame`."""
+    """Copies `n_frames` frames of `src` starting at `start_frame`.
+
+    `start_frame` exists because these uploads open with a dark intro/fade:
+    the player model returns zero detections on frames 0-11 of
+    0c9bd797 (mean pixel value ~49), and 2-3 detections at frame 200
+    (mean ~90). Trimming from frame 0 therefore measured the title card,
+    not the football. Returns (frames_written, fps, (w, h)).
+    """
     import cv2
 
     cap = cv2.VideoCapture(str(src))
@@ -129,6 +157,7 @@ def run_one(clip_path: Path, frames: int, workdir: Path, start_frame: int = 0) -
         "reid_merge": result.reid_merge,
     })
 
+    # ---- what actually landed in the database -------------------------
     mid = result.match_id
     out["db"] = {
         "player_tracking_rows": db.query(M.PlayerTracking).filter_by(match_id=mid).count(),
@@ -144,6 +173,8 @@ def run_one(clip_path: Path, frames: int, workdir: Path, start_frame: int = 0) -
         ev_types[e.event_type] = ev_types.get(e.event_type, 0) + 1
     out["event_types"] = ev_types
 
+    # Per-team metric rows -- the Phase 3 fix. team_id must not be a single
+    # pooled "unassigned" bucket if team assignment worked.
     tm_rows = db.query(M.TeamMetric).filter_by(match_id=mid).all()
     by_team: dict[str, dict] = {}
     for t in tm_rows:
@@ -158,6 +189,7 @@ def run_one(clip_path: Path, frames: int, workdir: Path, start_frame: int = 0) -
     out["calibration_invalid_reasons"] = sorted({c.invalid_reason for c in cs if c.invalid_reason})
     out["calibration_valid_episodes"] = sum(1 for c in cs if c.valid)
 
+    # Every metric must carry a real MetricMethod/MetricConfidence.
     bad = []
     for row in db.query(M.PlayerMetric).filter_by(match_id=mid).all():
         m = row.method.value if hasattr(row.method, "value") else row.method
@@ -176,6 +208,10 @@ def run_one(clip_path: Path, frames: int, workdir: Path, start_frame: int = 0) -
     out["stage_timings_s"] = {s.stage: s.seconds for s in timer.stages}
     out["total_pipeline_seconds"] = timer.total_seconds
 
+    # ---- the what-if engine, on THIS clip's real tracked players -------
+    # On real footage calibration is invalid, so there are no pitch
+    # coordinates and the engine must report `unavailable` rather than
+    # producing numbers. That refusal is the thing being validated here.
     try:
         from ai.computer_vision.tactical_analysis.attacking_direction import (
             infer_attacking_directions,
@@ -213,6 +249,8 @@ def run_one(clip_path: Path, frames: int, workdir: Path, start_frame: int = 0) -
     except Exception as exc:  # noqa: BLE001
         out["simulation"] = {"ERROR": f"{type(exc).__name__}: {exc}"}
     db.close()
+    # Windows keeps the .db file locked until the pool is disposed, which
+    # makes TemporaryDirectory cleanup raise.
     engine.dispose()
     return out
 
@@ -228,6 +266,8 @@ def main() -> int:
                     default=REPO_ROOT / "docs" / "dataset_audit" / "phase3_e2e_results.json")
     args = ap.parse_args()
 
+    # Distinct file sizes => distinct source footage rather than three
+    # copies of the same upload (storage/uploads has many duplicates).
     seen_sizes: set[int] = set()
     clips: list[Path] = []
     for p in sorted(UPLOAD_DIR.glob("*.mp4")):

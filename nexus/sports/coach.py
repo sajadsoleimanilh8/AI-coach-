@@ -171,7 +171,11 @@ class CoachReport:
 
 @dataclass
 class PreMatchCoachReport:
-    """A narrated pre-match readiness report."""
+    """A narrated pre-match readiness report.
+
+    `narrative` is the only LLM-generated field. `assessment` holds the
+    backend's computed numbers exactly as received, so a caller can always
+    check what the model was told against what it said."""
 
     player_id: str
     match_id: str | None
@@ -182,7 +186,12 @@ class PreMatchCoachReport:
 
 @dataclass
 class PsychologyCoachReport:
-    """A narrated mental-readiness report."""
+    """A narrated mental-readiness report.
+
+    `narrative` is the only LLM-generated field. `assessment` holds the
+    backend's computed numbers exactly as received and `findings` the
+    deterministically-derived phrases, so a caller can always check what the
+    model was told against what it said."""
 
     player_id: str
     match_id: str | None
@@ -207,7 +216,11 @@ class CoachAssistant:
     ) -> None:
         self._router = router
         self._adapter = adapter
+        # Optional so existing construction sites keep working unchanged;
+        # build_prematch_report() fails loudly rather than silently degrading
+        # if it was never wired up.
         self._prematch_client = prematch_client
+        # Same contract as _prematch_client above.
         self._psychology_client = psychology_client
 
     async def build_report(self, match_id: str, player_id: int | None = None) -> CoachReport:
@@ -315,7 +328,18 @@ class CoachAssistant:
     async def build_prematch_report(
         self, player_id: str, match_id: str | None = None
     ) -> PreMatchCoachReport | None:
-        """Fetch the player's latest pre-match assessment and narrate it."""
+        """Fetch the player's latest pre-match assessment and narrate it.
+
+        Same shape as build_report above: everything quantitative is computed
+        upstream (here, by the football backend's deterministic scorer), and
+        exactly one LLM call turns it into prose. The model is handed the
+        assessment as text and is told, in the system prompt, that it may not
+        recompute any of it.
+
+        Returns None when the player has no assessment yet -- the caller
+        surfaces that as "not submitted", never as a zeroed-out report.
+        Backend outages propagate as ProviderUnavailableError.
+        """
         if self._prematch_client is None:
             raise ProviderUnavailableError(
                 "Pre-match health client is not configured on this CoachAssistant"
@@ -347,6 +371,10 @@ class CoachAssistant:
 
         return PreMatchCoachReport(
             player_id=player_id,
+            # The assessment's own match_id is authoritative -- it is what the
+            # player actually submitted against. The path's match_id is only
+            # a fallback label for the case where the questionnaire was filed
+            # before any Match row existed.
             match_id=assessment.match_id or match_id,
             assessment=assessment,
             narrative=result.content,
@@ -356,7 +384,19 @@ class CoachAssistant:
     async def build_psychology_report(
         self, player_id: str, match_id: str | None = None
     ) -> PsychologyCoachReport | None:
-        """Fetch the player's latest mental-readiness assessment and narrate it."""
+        """Fetch the player's latest mental-readiness assessment and narrate it.
+
+        Same shape as build_prematch_report above, and the same guarantee:
+        everything quantitative is computed upstream (by the football backend's
+        deterministic ai/psychology_ai/ engine), the phrases are derived from it
+        in pure Python by derive_psychology_factors, and exactly one LLM call
+        turns the result into prose. The model is handed that context as text
+        and is told, in the system prompt, that it may not recompute any of it.
+
+        Returns None when the player has no assessment yet -- the caller
+        surfaces that as "not submitted", never as a zeroed-out report. Backend
+        outages propagate as ProviderUnavailableError.
+        """
         if self._psychology_client is None:
             raise ProviderUnavailableError(
                 "Psychology client is not configured on this CoachAssistant"
@@ -366,6 +406,8 @@ class CoachAssistant:
         if assessment is None:
             return None
 
+        # Deterministic derivation happens BEFORE the model is involved, and
+        # its output is the only thing the model gets to see.
         findings = derive_psychology_factors(assessment)
 
         decision, provider = await self._router.route_with_failover(task_type=TaskType.SPORTS)
@@ -389,6 +431,8 @@ class CoachAssistant:
 
         return PsychologyCoachReport(
             player_id=player_id,
+            # The assessment's own match_id is authoritative, for the same
+            # reason as in build_prematch_report above.
             match_id=assessment.match_id or match_id,
             assessment=assessment,
             findings=findings,

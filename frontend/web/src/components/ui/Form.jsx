@@ -1,6 +1,10 @@
 import { useId } from 'react';
 
-                                                                                                                                                                                                                            
+/**
+ * Form controls in the page's own language: JetBrains Mono uppercase labels
+ * with heavy letter-spacing, dark-card fields with a neon hairline border,
+ * and neon-blue focus glow. No generic admin-panel inputs.
+ */
 
 export function FormSection({ title, hint, children, columns = 2 }) {
   return (
@@ -25,7 +29,11 @@ function FieldShell({ id, label, hint, error, children, wide }) {
   );
 }
 
-                                                                                                                                                                                                                                            
+/**
+ * The 1-10 self-report control used by both questionnaires. A slider with the
+ * live value shown as a mono readout -- the number is always visible, because
+ * a slider whose value you cannot read is not an answerable question.
+ */
 export function ScaleField({ label, value, onChange, min = 1, max = 10, hint, lowLabel, highLabel, error }) {
   const id = useId();
   return (
@@ -86,8 +94,8 @@ export function NumberField({
           onChange={(event) => {
             const raw = event.target.value;
             if (raw === '') {
-                                                                   
-                                                                           
+              // An empty box is a real answer for a nullable field
+              // ("no recent training to date from") and must not become 0.
               onChange(nullable ? null : '');
               return;
             }
@@ -174,7 +182,7 @@ export function ToggleField({ label, value, onChange, hint }) {
   );
 }
 
-                                                                        
+/** Angular clip-path submit button (.btn-primary) with a busy state. */
 export function SubmitButton({ children, busy, busyLabel = 'Submitting', disabled, onClick, type = 'submit' }) {
   return (
     <button

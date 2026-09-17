@@ -30,6 +30,11 @@ class SportsAgent(Agent):
         """Optional extra context: the player's latest pre-match readiness
         assessment, when a client and a string player identifier are both
         supplied via context.extra.
+
+        Degrades to no message at all whenever the data is not there --
+        missing client, missing id, none submitted yet, or the football
+        backend being unreachable. An agent running without this context is
+        the normal case; a fabricated placeholder assessment would not be.
         """
         client = context.extra.get("prematch_health_client")
         player_id = context.extra.get("prematch_player_id")
@@ -60,6 +65,9 @@ class SportsAgent(Agent):
         adapter = context.extra.get("sports_adapter")
         match_id = context.extra.get("match_id")
         if adapter is None or match_id is None:
+            # Pre-match readiness stands on its own: it is submitted before
+            # any match or tracking data exists, so it must still reach the
+            # agent when there is no tactical analysis to pair it with.
             return prematch_messages
 
         player_id = context.extra.get("player_id")

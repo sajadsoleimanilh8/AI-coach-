@@ -16,6 +16,8 @@ class SqliteVectorStore(VectorStore):
     scoped by joining document_chunks -> documents on user_id. Fine at
     personal/small-team scale (hundreds to low thousands of chunks);
     intentionally NOT an ANN index. Swap this implementation later (e.g.
+    FAISS/pgvector) without touching VectorStore callers — that's the
+    point of the abstraction.
     """
 
     def __init__(self, engine: AsyncEngine) -> None:

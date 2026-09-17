@@ -15,7 +15,8 @@ def apply_verification(answer: str, report: VerificationReport) -> str:
     gets a single short line (principle 1's honesty is about never
     overclaiming, not about padding every response with a wall of text);
     MEDIUM adds a short count; LOW/UNCERTAIN/UNVERIFIED all visibly
-    """
+    disclose uncertainty and list the specific unresolved notes, not just
+    a number."""
     label = _BAND_LABELS[report.band]
     score_text = f" ({report.score:.0%})" if report.score is not None else ""
 

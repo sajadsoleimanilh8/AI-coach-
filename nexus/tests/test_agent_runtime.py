@@ -104,7 +104,7 @@ def _context(goal: str = "What is 2 + 3?", **extra: Any) -> AgentContext:
         goal=goal,
         user_id="u1",
         session_id=None,
-        rag_service=None,
+        rag_service=None,  # not used by _TestAgent.prepare_context (default no-op)
         long_term_memory=None,
         personal_state=None,
         extra=extra,
@@ -130,8 +130,8 @@ async def test_run_completes_after_one_tool_call_then_a_final_answer() -> None:
     assert step.tool_arguments == {"a": 2, "b": 3}
     assert step.tool_output == "5"
     assert step.thought == "Let me add those."
-    assert result.usage.prompt_tokens == 30
-    assert result.usage.completion_tokens == 13
+    assert result.usage.prompt_tokens == 30  # 10 + 20
+    assert result.usage.completion_tokens == 13  # 5 + 8
     assert result.model_used == "fake-model"
     assert result.provider_name == "fake"
 

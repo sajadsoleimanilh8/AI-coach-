@@ -18,7 +18,15 @@ import {
 import { AsyncBlock, EmptyState } from '../ui/States.jsx';
 import { SelectMatchState } from '../ui/MatchPicker.jsx';
 
-                                                                                                                                                                                                                                                                                                                                                                                                          
+/**
+ * TAB 2 -- per-player scores from ai/player_intelligence/*.
+ *
+ * The nine categories below are the full set the engine can produce. All nine
+ * are ALWAYS listed: a category the backend did not return is rendered as
+ * "Not Yet Computed" rather than being hidden, because a silently shorter
+ * list is indistinguishable from a player who happens to score badly on the
+ * missing ones.
+ */
 const CATEGORIES = [
   { key: 'first_touch_score', label: 'First Touch' },
   { key: 'passing_vision_score', label: 'Passing Vision' },
@@ -52,8 +60,8 @@ export default function TabPlayerIntelligence({ matchId, goToTab, onAttachMatch 
     { enabled: Boolean(matchId) },
   );
 
-                                                                            
-                                                                  
+  // Reset the selection whenever the match changes, so a tracking ID from a
+  // previous match can never be shown under a new match's header.
   useEffect(() => {
     setSelectedPlayer(null);
   }, [matchId]);
@@ -167,8 +175,8 @@ function PlayerDetail({ matchId, playerId, roster }) {
             (Array.isArray(metrics) ? metrics : []).map((metric) => [metric.metric_name, metric]),
           );
 
-                                                                           
-                                                                              
+          // Anything the engine produced that is not one of the nine known
+          // categories still gets a card -- dropping it would hide real data.
           const extras = (Array.isArray(metrics) ? metrics : []).filter(
             (metric) => !LABELS.has(metric.metric_name),
           );

@@ -11,7 +11,14 @@ from nexus.memory.storage import LongTermFactRecord, init_db, make_session_facto
 
 
 class LongTermMemoryStore:
-    """CRUD over LongTermFactRecord, scoped by user_id."""
+    """CRUD over LongTermFactRecord, scoped by user_id.
+
+    Deliberately a separate class from `MemoryStore` (session-scoped
+    conversation history) rather than an extension of it — the two have
+    different lifecycles and scoping keys (session_id vs. user_id), and
+    `MemoryStore`'s docstring already anticipates long-term/episodic/
+    semantic layers being added this way.
+    """
 
     def __init__(self, engine: AsyncEngine) -> None:
         self._engine = engine

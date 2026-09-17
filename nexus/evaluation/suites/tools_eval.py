@@ -13,7 +13,8 @@ class ToolsEvaluator(Evaluator):
     (this is what makes the case deterministic — real tool SELECTION by
     an LLM isn't reproducible enough for a regression gate), then the
     REAL run_tool_loop() decides whether it actually executes, under the
-    """
+    case's allowed_tools restriction. Asserts both which tool ran and
+    that permission filtering held."""
 
     suite = "tools"
 

@@ -6,6 +6,7 @@ from nexus.evaluation.types import CaseOutcome, EvalRun, SuiteResult
 from nexus.intelligence.capability_matrix import SUITE_CAPABILITY_MAP, CapabilityMatrix
 from nexus.memory.storage import create_async_db_engine
 
+# Static values from the committed models.yaml.
 _MISTRAL = "mistral:7b"
 _MISTRAL_STATIC_REASONING = 0.55
 _MISTRAL_STATIC_CODING = 0.55
@@ -60,6 +61,7 @@ async def test_unknown_model_returns_empty_rather_than_inventing_scores(tmp_path
 
 @pytest.mark.asyncio
 async def test_measurements_below_min_samples_do_not_move_the_score(tmp_path) -> None:
+    # "A handful of cases must never swing model selection."
     matrix = await _make_matrix(tmp_path, min_samples=20)
     await matrix.update_from_eval_run(_run("routing", pass_rate=1.0, case_count=5))
     await matrix.refresh()
@@ -79,6 +81,7 @@ async def test_learned_weight_rises_with_sample_size(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_learned_weight_is_capped(tmp_path) -> None:
+    # However much evidence accumulates, the static prior keeps a say.
     matrix = await _make_matrix(tmp_path, min_samples=20, max_learned_weight=0.7)
 
     assert matrix.learned_weight(10_000) == pytest.approx(0.7)
@@ -120,6 +123,8 @@ async def test_a_bad_measurement_lowers_the_effective_score(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_several_suites_feeding_one_capability_aggregate_by_sample_weight(tmp_path) -> None:
+    # routing, verification and tools all map to "reasoning": a 40-case
+    # suite must count for more than a 20-case one.
     matrix = await _make_matrix(tmp_path, min_samples=20)
     await matrix.update_from_eval_run(_run("routing", pass_rate=1.0, case_count=40))
     await matrix.update_from_eval_run(_run("verification", pass_rate=0.0, case_count=20))
@@ -146,6 +151,7 @@ async def test_safety_suite_never_becomes_a_capability_score(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_forecast_suite_is_excluded_too(tmp_path) -> None:
+    # Deterministic arithmetic — it exercises no model at all.
     assert "forecast" not in SUITE_CAPABILITY_MAP
 
 
@@ -171,6 +177,8 @@ async def test_model_id_can_be_passed_explicitly(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_refresh_is_required_before_reads_see_new_measurements(tmp_path) -> None:
+    # The cache is what makes effective_capabilities() synchronous, so a
+    # write is not visible until refresh() repopulates it.
     matrix = await _make_matrix(tmp_path, min_samples=20)
     await matrix.update_from_eval_run(_run("routing", pass_rate=1.0, case_count=40))
 

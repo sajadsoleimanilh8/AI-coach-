@@ -76,12 +76,12 @@ def test_flat_series_is_stable_regardless_of_inversion() -> None:
     assert normal_trend is not None and normal_trend.direction == "stable"
     assert inverted_trend is not None and inverted_trend.direction == "stable"
     assert normal_trend.slope == pytest.approx(0.0, abs=1e-6)
-    assert normal_trend.confidence == pytest.approx(1.0, abs=1e-6)
+    assert normal_trend.confidence == pytest.approx(1.0, abs=1e-6)  # flat = certain "stable"
 
 
 def test_below_min_samples_returns_none() -> None:
     now = time.time()
-    points = _rising_points(now)[:3]
+    points = _rising_points(now)[:3]  # 3 points, default min_samples is 4
 
     assert compute_trend("physical.energy", points) is None
 

@@ -45,7 +45,12 @@ def render_calibration_debug(
     field_detector=None,
     calibrator=None,
 ) -> tuple[bytes, dict]:
-    """Render keypoints, tracked anchors and valid projected pitch geometry."""
+    """Render keypoints, tracked anchors and valid projected pitch geometry.
+
+    Invalid fits still show their detected evidence, but pitch boundaries and
+    pitch-space player positions are suppressed. This is diagnostic tooling,
+    not an alternate route around ``calibration.valid``.
+    """
     if field_detector is None or calibrator is None:
         default_field, default_calibrator = _models()
         field_detector = field_detector or default_field
@@ -54,6 +59,10 @@ def render_calibration_debug(
     canvas = frame.copy()
     field = field_detector.detect(frame)
     attempt = calibrator.calibrate_frame(frame, field_region=field)
+    # frame_size enables the point-spread gate (HOMOGRAPHY_MIN_POINT_SPREAD).
+    # Without it evaluate() skips that check, and this route would report a
+    # clustered fit as VALID while the pipeline rejected the same frame --
+    # a debug view that disagrees with production is worse than none.
     frame_h, frame_w = frame.shape[:2]
     state = to_calibration_state(attempt, field_region=field,
                                  frame_size=(frame_w, frame_h))

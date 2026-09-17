@@ -14,16 +14,25 @@ from nexus.training.config import (
 )
 from nexus.training.validation import validate_dataset
 
+# The RTX 5070 Ti Laptop GPU is Blackwell, compute capability 12.0. PyTorch
+# names that arch "sm_120" in torch.cuda.get_arch_list().
 BLACKWELL_CAPABILITY = (12, 0)
 
+# The first bitsandbytes release carrying Blackwell kernels. Anything older
+# imports cleanly and then dies at the first quantized forward pass with an
+# opaque CUDA error, hours into a run — which is why this is checked here.
 MIN_BITSANDBYTES_VERSION = (0, 45)
 
 _MIN_TORCH_VERSION = (2, 7)
 
+# Under 20% headroom over the estimate, Windows is likely to start paging
+# GPU memory to host RAM rather than raising a clean OOM.
 _VRAM_HEADROOM_FACTOR = 1.2
 
 _BYTES_PER_GB = 1024**3
 
+# A rank-16 adapter on a 7B model serializes to roughly 70MB; this scales
+# that with both rank and model size.
 _ADAPTER_GB_PER_B_PER_RANK = 6.0e-4
 
 _TORCH_INSTALL_COMMAND = (
@@ -111,7 +120,7 @@ def _check_blackwell(torch: object) -> tuple[str, bool, str]:
     sm_120 kernels does not fail cleanly — it either refuses the device or
     silently falls back in ways that read as "training is just slow" — so
     this check prints the full picture (torch version, CUDA version, arch
-    """
+    list) and the exact remediation."""
     capability = torch.cuda.get_device_capability()  # type: ignore[attr-defined]
     arch_list = list(torch.cuda.get_arch_list())  # type: ignore[attr-defined]
     device_name = torch.cuda.get_device_name(0)  # type: ignore[attr-defined]
@@ -227,7 +236,7 @@ def _check_windows_spillover(estimate_gb: float, free_gb: float | None) -> tuple
     because the symptom is otherwise unreadable. On Windows the WDDM driver
     pages GPU memory to system RAM under pressure instead of raising a
     clean CUDA OOM, so an over-budget run does not crash: it goes 10-50x
-    """
+    slower and looks like a hung process."""
     if sys.platform != "win32":
         return (
             "windows_vram_spillover",
@@ -329,6 +338,17 @@ def run_preflight(
 ) -> PreflightResult:
     """Verifies the environment can actually train, in dependency order,
     with an ACTIONABLE message on every failure.
+
+    Checks that depend on a failed one are reported as skipped rather than
+    re-failing with a confusing cascade; independent checks (dataset, disk)
+    always run, so one invocation surfaces every problem the user has to
+    fix rather than making them re-run after each fix.
+
+    probe_gpu=False omits every check that would have to IMPORT the ML
+    stack, leaving only the plan-and-data checks. train.py's --dry-run uses
+    it so a dry run stays honest about what it did not look at, rather than
+    importing torch behind the user's back on a machine where the whole
+    point was that the ML stack may not be installed.
     """
     checks: list[tuple[str, bool, str]] = []
 

@@ -18,7 +18,7 @@ class SessionRecord(Base):
     created_at: Mapped[float] = mapped_column()
     last_active_at: Mapped[float] = mapped_column()
 
-    messages: Mapped[list["MessageRecord"]] = relationship(
+    messages: Mapped[list[MessageRecord]] = relationship(
         back_populates="session",
         cascade="all, delete-orphan",
         order_by="MessageRecord.created_at",
@@ -64,10 +64,10 @@ class LatencyRecord(Base):
 class DocumentRecord(Base):
     __tablename__ = "documents"
 
-    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)  # uuid hex
     user_id: Mapped[str] = mapped_column(String(64), index=True)
     source_name: Mapped[str] = mapped_column(String(512))
-    source_type: Mapped[str] = mapped_column(String(16))
+    source_type: Mapped[str] = mapped_column(String(16))  # pdf|docx|txt|md|csv|code
     chunk_count: Mapped[int] = mapped_column()
     ingested_at: Mapped[float] = mapped_column()
 
@@ -79,7 +79,7 @@ class DocumentChunkRecord(Base):
     doc_id: Mapped[str] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), index=True)
     chunk_index: Mapped[int] = mapped_column()
     chunk_text: Mapped[str] = mapped_column(Text)
-    embedding_json: Mapped[str] = mapped_column(Text)
+    embedding_json: Mapped[str] = mapped_column(Text)  # JSON-encoded list[float]
     created_at: Mapped[float] = mapped_column()
 
 
@@ -129,6 +129,10 @@ class EvalRunRecord(Base):
     git_sha: Mapped[str] = mapped_column(String(64), default="")
     config_json: Mapped[str] = mapped_column(Text)
     summary_json: Mapped[str] = mapped_column(Text)
+    # Which provider set produced this run. Defaults to "unknown" so rows
+    # written before this column existed keep a truthful label rather than
+    # being silently assumed comparable — compare_runs() refuses on
+    # "unknown" precisely because those rows cannot be trusted either way.
     provider_mode: Mapped[str] = mapped_column(String(16), default="unknown")
     pinned_model_id: Mapped[str] = mapped_column(String(128), default="")
 
@@ -176,7 +180,7 @@ class ModelCapabilityRecord(Base):
     Append-only like PersonalSignalRecord: CapabilityMatrix always
     re-derives an effective score from the rows rather than mutating a
     single "current" value, so changing the blending formula later
-    """
+    re-interprets the whole measurement history instead of losing it."""
 
     __tablename__ = "model_capabilities"
 
@@ -223,6 +227,12 @@ def create_async_db_engine(database_path: str) -> AsyncEngine:
     return create_async_engine(_sqlite_url(database_path))
 
 
+# Columns added to already-shipped tables. create_all() only creates
+# MISSING TABLES — it will not alter a table that already exists — so a
+# database written by an earlier version keeps its old shape and every
+# query naming a new column fails. Each entry is (table, column, DDL type
+# + default) and is applied only when absent, which makes this idempotent
+# and safe to run on a fresh database too.
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("eval_runs", "provider_mode", "VARCHAR(16) DEFAULT 'unknown'"),
     ("eval_runs", "pinned_model_id", "VARCHAR(128) DEFAULT ''"),
@@ -236,7 +246,7 @@ def _apply_added_columns(connection) -> None:  # noqa: ANN001 - sync SQLAlchemy 
     existing_tables = set(inspector.get_table_names())
     for table, column, ddl in _ADDED_COLUMNS:
         if table not in existing_tables:
-            continue
+            continue  # create_all() just built it with the column present
         columns = {c["name"] for c in inspector.get_columns(table)}
         if column in columns:
             continue

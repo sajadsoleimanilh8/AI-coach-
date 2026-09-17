@@ -2,15 +2,10 @@
 Unit tests for jersey-color team assignment.
 """
 
-import os
-import sys
 
 import numpy as np
 
-repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-if repo_root not in sys.path:
-    sys.path.insert(0, repo_root)
-
+from ai.computer_vision.player_tracking.tracker import TrackedDetection
 from ai.computer_vision.tactical_analysis.team_assignment import (
     _cluster_team_labels,
     _kmeans2,
@@ -18,7 +13,6 @@ from ai.computer_vision.tactical_analysis.team_assignment import (
     assign_teams,
     crop_to_feature,
 )
-from ai.computer_vision.player_tracking.tracker import TrackedDetection
 
 
 def _solid_crop(bgr, h=40, w=20):
@@ -28,13 +22,17 @@ def _solid_crop(bgr, h=40, w=20):
 
 
 def test_crop_to_feature_masks_grass_and_skin():
+    # Pure grass green (BGR) should be masked out entirely -> unusable crop.
     grass = _solid_crop((0, 180, 0))
     assert crop_to_feature(grass) is None
 
+    # A crop that's mostly grass with a small colored patch too small to
+    # clear TEAM_ASSIGNMENT_MIN_USABLE_PIXELS should also come back None.
     mostly_grass = _solid_crop((0, 180, 0), h=40, w=20)
-    mostly_grass[0:2, 0:2] = (0, 0, 200)
+    mostly_grass[0:2, 0:2] = (0, 0, 200)  # a few red pixels, not enough
     assert crop_to_feature(mostly_grass) is None
 
+    # A solid, saturated red crop should produce a usable feature.
     red = _solid_crop((0, 0, 200))
     feat = crop_to_feature(red)
     assert feat is not None
@@ -42,6 +40,9 @@ def test_crop_to_feature_masks_grass_and_skin():
 
 
 def test_crop_to_feature_hue_circularity():
+    # Two reds that straddle the OpenCV hue wraparound (H near 0 and H
+    # near 179) should both produce a feature with cos_h close to +1 --
+    # not a naive-average artifact landing near hue=90 (green/cyan).
     red_bgr = _solid_crop((0, 0, 255))
     feat = crop_to_feature(red_bgr)
     assert feat is not None
@@ -70,6 +71,8 @@ def test_margins_bounds():
     labels, centroids = _kmeans2(features)
     margins = _margins(features, centroids, labels)
     assert np.all(margins >= 0.0) and np.all(margins <= 1.0)
+    # Well-separated, identical-within-cluster points should sit almost
+    # exactly on their own centroid.
     assert np.all(margins > 0.9)
 
 
@@ -79,14 +82,20 @@ def test_cluster_team_labels_deterministic_across_centroid_order():
 
     labels_ab = _cluster_team_labels(np.stack([red, blue]))
     labels_ba = _cluster_team_labels(np.stack([blue, red]))
+    # Whichever index red/blue end up at, the SAME physical colors must
+    # resolve to the SAME team-home/team-away labels.
     assert labels_ab[0] != labels_ab[1]
     assert {labels_ab[0], labels_ab[1]} == {"team-home", "team-away"}
+    # red's label should be identical regardless of which centroid slot it lands in.
     red_label_when_first = labels_ab[0]
     red_label_when_second = labels_ba[1]
     assert red_label_when_first == red_label_when_second
 
 
 def test_assign_teams_too_few_crops_leaves_everyone_unassigned():
+    # No real video on disk -- _iter_sampled_crops degrades gracefully to
+    # yielding nothing, so this exercises the "not enough usable crops"
+    # branch without needing a video fixture.
     frames = [
         [
             TrackedDetection(

@@ -22,9 +22,32 @@ import {
 import { EmptyState, ErrorState, LoadingState } from '../ui/States.jsx';
 import { NumberField, SelectField, SubmitButton, TextField, ToggleField } from '../ui/Form.jsx';
 
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        
+/**
+ * TAB 9 -- the LLM tactical assistant, served by NEXUS on :8100.
+ *
+ * NEXUS is a separate process from the core backend on :8000 and is very
+ * often not running. That is treated as a first-class state here, not as a
+ * generic failure: the error names the port and says which service to start.
+ *
+ * The narrated psychology report gets the same treatment as everywhere else
+ * in this app -- computed numbers and generated prose are rendered as two
+ * visibly different things, because NEXUS writes only the `narrative` field
+ * and every number in that response came from the football backend's
+ * deterministic scoring.
+ */
 
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
+/**
+ * Session ids belong to NEXUS, not to this client.
+ *
+ * POST /api/chat treats session_id as a LOOKUP, not as a declaration: null
+ * means "create one and tell me the id", and any non-null value must already
+ * exist in its MemoryStore or the request is rejected
+ * (nexus/api/routes/chat.py::_resolve_session -> SessionNotFoundError -> 404).
+ *
+ * A client-minted UUID therefore 404s on the very first message every time —
+ * "No session found for id=...". So the first request deliberately sends
+ * null, and every request after it echoes back whatever id NEXUS returned.
+ */
 const NO_SESSION = null;
 
 export default function TabCoachChat({ matchId }) {
@@ -44,9 +67,9 @@ export default function TabCoachChat({ matchId }) {
   );
 }
 
-                                                                          
-                                                                          
-                                                                          
+/* ==================================================================== */
+/* Chat                                                                 */
+/* ==================================================================== */
 
 function ChatPanel() {
   const [sessionId, setSessionId] = useState(NO_SESSION);
@@ -79,8 +102,8 @@ function ChatPanel() {
 
   const resetSession = useCallback(() => {
     controllerRef.current?.abort();
-                                                                           
-                                                                  
+    // Back to null rather than to a fresh client-side id: the next message
+    // asks NEXUS for a new session, exactly as the first one did.
     setSessionId(NO_SESSION);
     setMessages([]);
     setError(null);
@@ -112,14 +135,22 @@ function ChatPanel() {
       model_id: modelId.trim() || null,
     };
 
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
+    /**
+     * NEXUS keeps sessions in memory, so restarting it invalidates the id
+     * this tab is holding. Every later message would then 404 with "No
+     * session found" until the user happened to press New Session.
+     *
+     * Recover once, automatically: drop the dead id and let NEXUS mint a
+     * fresh one. Only for a 404 on a session we were carrying — a 404 with
+     * no session id is a different fault and must not be retried into a loop.
+     */
     const isDeadSession = (caught) =>
       caught?.status === 404 && Boolean(body.session_id);
 
     try {
       if (useStreaming) {
-                                                                            
-                                                                             
+        // The assistant turn is appended empty and filled by deltas, so the
+        // answer appears token-by-token rather than after a long blank wait.
         setMessages((current) => [...current, { role: 'assistant', content: '', streaming: true }]);
 
         await streamChat(body, {
@@ -142,9 +173,9 @@ function ChatPanel() {
               return next;
             });
             setRouting({
-                                                                     
-                                                                         
-                                                     
+              // The streaming "done" frame carries provider_name and
+              // routing_reason but not the model id -- so the model line
+              // says so rather than showing a guess.
               model: null,
               provider: event_.provider_name,
               reason: event_.routing_reason,
@@ -190,8 +221,8 @@ function ChatPanel() {
         return;
       }
 
-                                                                              
-                                                       
+      // Drop the half-written assistant turn before any retry, so a recovered
+      // send does not leave an empty bubble behind it.
       setMessages((current) => {
         const last = current[current.length - 1];
         return last?.role === 'assistant' && !last.content ? current.slice(0, -1) : current;
@@ -279,8 +310,8 @@ function ChatPanel() {
             {sessionId ? (
               <code className="dash-code-sm">{sessionId.slice(0, 8)}…</code>
             ) : (
-                                                                              
-                                      
+              // Not an error state: no session exists until NEXUS creates one
+              // on the first message.
               <span className="dash-absent">new on first message</span>
             )}
           </span>
@@ -355,7 +386,7 @@ function ChatPanel() {
   );
 }
 
-                                                                    
+/** Which model actually answered -- as reported, never inferred. */
 function NexusModelIndicator({ routing, busy }) {
   if (busy && !routing) {
     return (
@@ -405,9 +436,9 @@ function NexusModelIndicator({ routing, busy }) {
   );
 }
 
-                                                                          
-                                                                          
-                                                                          
+/* ==================================================================== */
+/* Narrated psychology report                                           */
+/* ==================================================================== */
 
 function PsychologyReportPanel({ matchId }) {
   const [playerId, setPlayerId] = useState('');

@@ -31,7 +31,7 @@ class _FakeJudge:
 
 def _engine(*, fact_checker=None, judge=None, escalate_below=0.65, enable_fact_check=False, enable_judge=True) -> VerificationEngine:
     return VerificationEngine(
-        None,
+        None,  # router is unused directly by the engine — fact_checker/judge own their own routing
         fact_checker or _FakeFactChecker([]),
         judge or _FakeJudge(None),
         escalate_below=escalate_below,

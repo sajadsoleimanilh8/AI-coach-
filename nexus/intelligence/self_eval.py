@@ -13,6 +13,8 @@ logger = get_logger("intelligence.self_eval")
 
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 
+# Below this, the answer is considered worth mining as a training example:
+# the model itself is saying it left something out.
 DEFAULT_LOW_SCORE_THRESHOLD = 0.6
 
 _SYSTEM_PROMPT = (
@@ -66,7 +68,16 @@ def _parse(text: str) -> tuple[float, bool, list[str]] | None:
 
 
 class SelfEvaluator:
-    """Asks the model to critique its own answer for completeness."""
+    """Asks the model to critique its own answer for completeness.
+
+    Deliberately distinct from VerificationEngine, which checks
+    CORRECTNESS against evidence. These answer different questions: an
+    answer can be complete and wrong, or correct and evasive. A self-eval
+    finding is therefore ADDITIVE SIGNAL and NEVER overrides a
+    verification verdict — a model grading its own homework is not
+    evidence, and letting it raise its own confidence band would undo
+    exactly the guarantee verification exists to provide.
+    """
 
     def __init__(
         self,
@@ -103,6 +114,9 @@ class SelfEvaluator:
 
         parsed = _parse(result.content)
         if parsed is None:
+            # An unparseable critique is not a bad answer — it is a missing
+            # measurement, and reporting it as completeness 0.0 would flag
+            # good answers for retraining.
             logger.warning("self-eval response could not be parsed; treating as no signal")
             return SelfEvalResult(
                 completeness=0.0,

@@ -7,8 +7,8 @@ from nexus.api.schemas import (
     ClearedWeaknessSchema,
     DimensionForecastSchema,
     DimensionStateSchema,
-    PersonalForecastResponse,
     PersonalBaselinesResponse,
+    PersonalForecastResponse,
     PersonalProfileResponse,
     PersonalProfileSetRequest,
     PersonalSignalRequest,
@@ -19,6 +19,7 @@ from nexus.api.schemas import (
     TrendSchema,
     WeaknessSchema,
 )
+from nexus.api.services import get_services
 from nexus.core.exceptions import InvalidSignalError
 from nexus.personal.baseline import BaselineCalculator
 from nexus.personal.forecast import ScenarioSimulator, StateForecaster
@@ -74,7 +75,7 @@ def _weakness_to_schema(weakness: Weakness) -> WeaknessSchema:
 
 @router.get("/personal/{user_id}/state", response_model=PersonalStateResponse)
 async def get_state(user_id: str, request: Request) -> PersonalStateResponse:
-    engine: PersonalStateEngine = request.app.state.personal_state_engine
+    engine: PersonalStateEngine = get_services(request).personal_state_engine
     return _state_to_schema(await engine.get_state(user_id))
 
 
@@ -82,7 +83,7 @@ async def get_state(user_id: str, request: Request) -> PersonalStateResponse:
 async def record_signal(
     user_id: str, payload: PersonalSignalRequest, request: Request
 ) -> PersonalStateResponse:
-    engine: PersonalStateEngine = request.app.state.personal_state_engine
+    engine: PersonalStateEngine = get_services(request).personal_state_engine
     try:
         await engine.record_signal(
             user_id=user_id,
@@ -98,7 +99,7 @@ async def record_signal(
 
 @router.get("/personal/{user_id}/baselines", response_model=PersonalBaselinesResponse)
 async def get_baselines(user_id: str, request: Request) -> PersonalBaselinesResponse:
-    calculator: BaselineCalculator = request.app.state.baseline_calculator
+    calculator: BaselineCalculator = get_services(request).baseline_calculator
     baselines = await calculator.get_baselines(user_id)
     return PersonalBaselinesResponse(
         user_id=user_id,
@@ -116,7 +117,7 @@ async def get_baselines(user_id: str, request: Request) -> PersonalBaselinesResp
 
 @router.get("/personal/{user_id}/weaknesses", response_model=PersonalWeaknessesResponse)
 async def get_weaknesses(user_id: str, request: Request) -> PersonalWeaknessesResponse:
-    weakness_engine: WeaknessEngine = request.app.state.weakness_engine
+    weakness_engine: WeaknessEngine = get_services(request).weakness_engine
     weaknesses = await weakness_engine.detect(user_id)
     return PersonalWeaknessesResponse(
         user_id=user_id, weaknesses=[_weakness_to_schema(w) for w in weaknesses]
@@ -125,7 +126,7 @@ async def get_weaknesses(user_id: str, request: Request) -> PersonalWeaknessesRe
 
 @router.get("/personal/{user_id}/profile", response_model=PersonalProfileResponse)
 async def get_profile(user_id: str, request: Request) -> PersonalProfileResponse:
-    profile_store: ProfileStore = request.app.state.profile_store
+    profile_store: ProfileStore = get_services(request).profile_store
     return PersonalProfileResponse(user_id=user_id, profile=await profile_store.get_profile(user_id))
 
 
@@ -133,7 +134,7 @@ async def get_profile(user_id: str, request: Request) -> PersonalProfileResponse
 async def set_profile(
     user_id: str, payload: PersonalProfileSetRequest, request: Request
 ) -> PersonalProfileResponse:
-    profile_store: ProfileStore = request.app.state.profile_store
+    profile_store: ProfileStore = get_services(request).profile_store
     await profile_store.set_profile(user_id, payload.profile)
     return PersonalProfileResponse(user_id=user_id, profile=payload.profile)
 
@@ -142,7 +143,7 @@ async def set_profile(
 async def get_forecast(
     user_id: str, request: Request, horizon_days: int = 14
 ) -> PersonalForecastResponse:
-    forecaster: StateForecaster = request.app.state.state_forecaster
+    forecaster: StateForecaster = get_services(request).state_forecaster
     result = await forecaster.forecast(user_id, horizon_days=horizon_days)
     return PersonalForecastResponse(
         user_id=result.user_id,
@@ -168,7 +169,7 @@ async def get_forecast(
 async def simulate_scenario(
     user_id: str, payload: ScenarioSimulateRequest, request: Request
 ) -> ScenarioSimulateResponse:
-    simulator: ScenarioSimulator = request.app.state.scenario_simulator
+    simulator: ScenarioSimulator = get_services(request).scenario_simulator
     result = await simulator.simulate(user_id, payload.deltas)
     return ScenarioSimulateResponse(
         user_id=result.user_id,
@@ -190,7 +191,7 @@ async def simulate_scenario(
 
 @router.delete("/personal/{user_id}", status_code=204)
 async def delete_personal_data(user_id: str, request: Request) -> None:
-    engine: PersonalStateEngine = request.app.state.personal_state_engine
-    profile_store: ProfileStore = request.app.state.profile_store
+    engine: PersonalStateEngine = get_services(request).personal_state_engine
+    profile_store: ProfileStore = get_services(request).profile_store
     await engine.delete_all(user_id)
     await profile_store.delete_profile(user_id)

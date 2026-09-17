@@ -3,6 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+# Which provider set produced a run. Comparing across these is meaningless
+# — a fakes run scores whatever its scripts say, so diffing it against a
+# real-provider run manufactures regressions that describe the harness,
+# not the model. compare_runs() refuses rather than emitting that diff.
+# "unknown" covers rows written before this field existed; it is never
+# assumed compatible with anything, including itself.
 ProviderMode = Literal["real", "fake", "unknown"]
 
 
@@ -46,7 +52,7 @@ class SuiteResult:
     total_latency_seconds: float
 
     @classmethod
-    def from_outcomes(cls, suite: str, outcomes: list[CaseOutcome]) -> "SuiteResult":
+    def from_outcomes(cls, suite: str, outcomes: list[CaseOutcome]) -> SuiteResult:
         n = len(outcomes)
         return cls(
             suite=suite,
@@ -66,6 +72,10 @@ class EvalRun:
     suites: list[SuiteResult]
     config_snapshot: dict[str, Any]
     git_sha: str | None
+    # Defaulted so every existing construction site (and every run loaded
+    # from a row written before these columns existed) stays valid. The
+    # default is "unknown" rather than "fake" on purpose: guessing a mode
+    # is exactly the failure this field exists to prevent.
     provider_mode: ProviderMode = "unknown"
     pinned_model_id: str | None = None
     skipped_suites: list[SkippedSuite] = field(default_factory=list)

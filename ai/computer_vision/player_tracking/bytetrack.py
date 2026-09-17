@@ -1,6 +1,7 @@
 from __future__ import annotations
+
 from enum import Enum
-from typing import List, Tuple
+
 import numpy as np
 import scipy.linalg
 from scipy.optimize import linear_sum_assignment
@@ -28,7 +29,7 @@ class KalmanFilter:
         self._std_weight_position = 1.0 / 20
         self._std_weight_velocity = 1.0 / 160
 
-    def initiate(self, measurement: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def initiate(self, measurement: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         mean_pos = measurement
         mean_vel = np.zeros_like(mean_pos)
         mean = np.r_[mean_pos, mean_vel]
@@ -45,7 +46,7 @@ class KalmanFilter:
         covariance = np.diag(np.square(std))
         return mean, covariance
 
-    def predict(self, mean: np.ndarray, covariance: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def predict(self, mean: np.ndarray, covariance: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         std = [
             self._std_weight_position * mean[3],
             self._std_weight_position * mean[3],
@@ -61,7 +62,7 @@ class KalmanFilter:
         covariance = np.linalg.multi_dot((self._motion_mat, covariance, self._motion_mat.T)) + motion_cov
         return mean, covariance
 
-    def project(self, mean: np.ndarray, covariance: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def project(self, mean: np.ndarray, covariance: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         std = [
             self._std_weight_position * mean[3],
             self._std_weight_position * mean[3],
@@ -73,7 +74,7 @@ class KalmanFilter:
         covariance = np.linalg.multi_dot((self._update_mat, covariance, self._update_mat.T)) + innov_cov
         return mean, covariance
 
-    def update(self, mean: np.ndarray, covariance: np.ndarray, measurement: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def update(self, mean: np.ndarray, covariance: np.ndarray, measurement: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         projected_mean, projected_cov = self.project(mean, covariance)
         chol_factor, lower = scipy.linalg.cho_factor(projected_cov, lower=True, check_finite=False)
         kalman_gain = scipy.linalg.cho_solve((chol_factor, lower), np.dot(covariance, self._update_mat.T).T, check_finite=False).T
@@ -110,7 +111,7 @@ class STrack:
         process (e.g. a Celery worker handling multiple uploads), otherwise
         player_id keeps climbing across unrelated matches instead of
         starting fresh each time -- _count is a class-level counter, not
-        """
+        per-tracker."""
         STrack._count = 0
 
     @property
@@ -142,7 +143,19 @@ class STrack:
         self.mean, self.covariance = self.kalman_filter.initiate(self.tlwh_to_xyah(self._tlwh))
         self.tracklet_len = 0
         self.state = TrackState.Tracked
+        # Set frame_id here, not only in update(). A track that is activated
+        # and then goes unmatched on the very next frame moves to lost_stracks
+        # WITHOUT update() ever running, and the lost-track buffer cleanup
+        # reads track.frame_id. That is common on real football footage: a
+        # single missed detection during an occlusion.
         self.frame_id = frame_id
+        # Only the FIRST hit is gated. Frame 1 has no prior frame to confirm
+        # against, so it is accepted immediately; every later new track must
+        # survive one more frame before being confirmed. Without this, the
+        # "unconfirmed" bucket in BYTETracker.update() is always empty and a
+        # single transient false-positive detection gets a full player_id
+        # instantly. update() sets is_activated=True on a genuine re-match, so
+        # re-matches are unaffected.
         self.is_activated = (frame_id == 1)
 
     def predict(self):
@@ -207,7 +220,7 @@ def bbox_iou(boxes1: np.ndarray, boxes2: np.ndarray) -> np.ndarray:
 _FORBIDDEN_COST = 1e6
 
 
-def linear_assignment(cost_matrix: np.ndarray, thresh: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def linear_assignment(cost_matrix: np.ndarray, thresh: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Hungarian matching, with `thresh` applied BEFORE the solve.
 
     Filtering afterwards is wrong, not merely wasteful: linear_sum_assignment
@@ -252,9 +265,9 @@ class BYTETracker:
         self.track_buffer = track_buffer
         
         self.frame_id = 0
-        self.tracked_stracks: List[STrack] = []
-        self.lost_stracks: List[STrack] = []
-        self.removed_stracks: List[STrack] = []
+        self.tracked_stracks: list[STrack] = []
+        self.lost_stracks: list[STrack] = []
+        self.removed_stracks: list[STrack] = []
         self.kalman_filter = KalmanFilter()
 
     def reset(self) -> None:
@@ -267,7 +280,7 @@ class BYTETracker:
         self.removed_stracks = []
         STrack.reset_id_counter()
 
-    def update(self, output_results: np.ndarray) -> List[STrack]:
+    def update(self, output_results: np.ndarray) -> list[STrack]:
         self.frame_id += 1
         activated_stracks, refind_stracks, lost_stracks, removed_stracks = [], [], [], []
 
@@ -372,9 +385,12 @@ class BYTETracker:
         self.removed_stracks.extend(removed_stracks)
         self._trim_removed_tracks()
 
+        # Only emit CONFIRMED tracks: a single-hit detection that has not yet
+        # survived the one-frame confirmation delay must not appear in this
+        # frame's output.
         return [t for t in self.tracked_stracks if t.is_activated]
 
-    def _expire_lost_tracks(self, collect: bool = False) -> List[STrack]:
+    def _expire_lost_tracks(self, collect: bool = False) -> list[STrack]:
         """Mark every lost track older than track_buffer as removed.
 
         Called on EVERY frame, including frames with no detections at all --
@@ -405,7 +421,7 @@ class BYTETracker:
             return
         self.removed_stracks = self.removed_stracks[-REMOVED_TRACK_HISTORY:]
 
-    def _join_tracks(self, tlista: List[STrack], tlistb: List[STrack]) -> List[STrack]:
+    def _join_tracks(self, tlista: list[STrack], tlistb: list[STrack]) -> list[STrack]:
         exists = {}
         res = []
         for t in tlista:
@@ -417,14 +433,14 @@ class BYTETracker:
                 res.append(t)
         return res
 
-    def _sub_tracks(self, tlista: List[STrack], tlistb: List[STrack]) -> List[STrack]:
+    def _sub_tracks(self, tlista: list[STrack], tlistb: list[STrack]) -> list[STrack]:
         stracks = {t.track_id: t for t in tlista}
         for t in tlistb:
             if t.track_id in stracks:
                 del stracks[t.track_id]
         return list(stracks.values())
 
-    def _iou_distance(self, tracks: List[STrack], detections: List[STrack]) -> np.ndarray:
+    def _iou_distance(self, tracks: list[STrack], detections: list[STrack]) -> np.ndarray:
         if len(tracks) == 0 or len(detections) == 0:
             return np.zeros((len(tracks), len(detections)))
         track_boxes = np.array([track.tlbr for track in tracks])

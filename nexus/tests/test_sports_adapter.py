@@ -67,7 +67,7 @@ def _handler(*, formation_status: int = 200, unreachable_paths: frozenset[str] =
             return httpx.Response(200, json=_FORMATION)
         if path.startswith("/api/tactical/team_shape/"):
             return httpx.Response(200, json=_TEAM_SHAPE)
-        if path.count("/") == 4:
+        if path.count("/") == 4:  # /api/player_intelligence/{match_id}/{player_id}
             return httpx.Response(200, json=_PLAYER_SCOPED)
         if path.startswith("/api/player_intelligence/"):
             return httpx.Response(200, json=_PLAYERS)
@@ -91,7 +91,7 @@ async def test_low_upstream_confidence_metrics_land_in_unavailable_not_coerced()
     assert "press_resistance_score" in unavailable_names
 
     pressing = next(m for m in analysis.unavailable if m.metric_name == "pressing_intensity_score")
-    assert pressing.value is None
+    assert pressing.value is None  # never coerced to 0.0
     assert pressing.is_available is False
 
 
@@ -144,6 +144,8 @@ async def test_coverage_math() -> None:
     total = len(analysis.team_metrics) + len(analysis.player_metrics)
     available = total - len(analysis.unavailable)
     assert analysis.coverage == pytest.approx(available / total)
+    # formation + compactness (available), pressing (unavailable) = 3 team metrics
+    # decision_making + first_touch (available), press_resistance (unavailable) = 3 player metrics
     assert total == 6
     assert len(analysis.unavailable) == 2
     assert analysis.coverage == pytest.approx(4 / 6)
@@ -171,4 +173,5 @@ async def test_get_player_analysis_scopes_to_the_requested_player() -> None:
     assert len(analysis.player_metrics) == 1
     assert analysis.player_metrics[0].metric_name == "decision_making_score"
     assert analysis.player_metrics[0].player_id == 7
+    # Team context is still included for the player-scoped view.
     assert any(m.metric_name == "compactness_score" for m in analysis.team_metrics)

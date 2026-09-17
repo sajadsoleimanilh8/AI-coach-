@@ -46,6 +46,9 @@ class _FakeLatencyTracker:
 
 
 def _registry() -> list[ModelInfo]:
+    # Equal cost on both cloud-ish candidates isolates the latency/capability
+    # comparison — cost_norm is identical for both, so it can't be what
+    # decides the ranking; only capability and the latency component can.
     return [
         ModelInfo(
             id="provider-a-model",
@@ -73,10 +76,12 @@ def _provider_manager() -> ProviderManager:
 
 
 def test_low_latency_falls_back_to_cost_ordering_without_latency_data() -> None:
-    router = ModelRouter(_provider_manager(), _registry())
+    router = ModelRouter(_provider_manager(), _registry())  # no latency_tracker
 
     decision = router.route(task_type=TaskType.COMPLEX_REASONING, policy=RoutingPolicy.LOW_LATENCY)
 
+    # Neither candidate is "local", so the is_local fallback heuristic gives
+    # both a component of 0.0 — equal cost ties them, broken by model.id.
     assert decision.model_id == "provider-a-model"
     assert "falling back to local-preference heuristic" in decision.reason
 
@@ -84,8 +89,8 @@ def test_low_latency_falls_back_to_cost_ordering_without_latency_data() -> None:
 def test_low_latency_prefers_the_observed_faster_model() -> None:
     latency_tracker = _FakeLatencyTracker(
         {
-            ("provider-a", "provider-a-model"): (0.1, 20),
-            ("provider-b", "provider-b-model"): (2.0, 20),
+            ("provider-a", "provider-a-model"): (0.1, 20),  # fast
+            ("provider-b", "provider-b-model"): (2.0, 20),  # slow
         }
     )
     router = ModelRouter(_provider_manager(), _registry(), latency_tracker=latency_tracker)
@@ -98,6 +103,9 @@ def test_low_latency_prefers_the_observed_faster_model() -> None:
 
 
 def test_low_latency_flips_when_observed_data_contradicts_cost_ordering() -> None:
+    # provider-b is the "winner" by cost/id tiebreak without data (see the
+    # no-data test above's sibling ordering); with data showing it's much
+    # slower, provider-a must win instead.
     latency_tracker = _FakeLatencyTracker(
         {
             ("provider-a", "provider-a-model"): (0.2, 10),
@@ -112,18 +120,23 @@ def test_low_latency_flips_when_observed_data_contradicts_cost_ordering() -> Non
     )
 
     assert with_data.model_id == "provider-a-model"
-    assert without_data.model_id == "provider-a-model"
+    assert without_data.model_id == "provider-a-model"  # tie -> alphabetical, same winner here
+    # The important assertion is *why*: heuristic vs. real observed data.
     assert "observed p50" in with_data.reason
     assert "falling back to local-preference heuristic" in without_data.reason
 
 
 def test_balanced_uses_observed_latency_instead_of_local_bonus() -> None:
+    # Without data: provider-b wins on capability alone (0.65 > 0.6, equal
+    # cost_norm, equal locality-fallback term of 0.0 for both).
     without_data = ModelRouter(_provider_manager(), _registry()).route(
         task_type=TaskType.COMPLEX_REASONING, policy=RoutingPolicy.BALANCED
     )
     assert without_data.model_id == "provider-b-model"
     assert "falling back to local-preference heuristic" in without_data.reason
 
+    # With data: provider-a is far faster, which is enough to flip BALANCED
+    # despite provider-b's small capability edge.
     latency_tracker = _FakeLatencyTracker(
         {
             ("provider-a", "provider-a-model"): (0.1, 15),
@@ -139,6 +152,8 @@ def test_balanced_uses_observed_latency_instead_of_local_bonus() -> None:
 
 
 def test_missing_data_for_one_candidate_falls_back_only_for_that_candidate() -> None:
+    # provider-a has data, provider-b doesn't — each must use its own path
+    # independently rather than the whole scoring pass failing.
     latency_tracker = _FakeLatencyTracker({("provider-a", "provider-a-model"): (0.1, 10)})
     router = ModelRouter(_provider_manager(), _registry(), latency_tracker=latency_tracker)
 

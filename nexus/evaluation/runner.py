@@ -22,8 +22,8 @@ from nexus.core.types import GenerationChunk, GenerationResult, ModelInfo, Routi
 from nexus.evaluation.types import CaseOutcome, EvalCase, EvalRun, SkippedSuite, SuiteResult
 from nexus.intelligence.privacy_classifier import PrivacyClassifier, PrivacyClassifierConfig
 from nexus.intelligence.task_classifier import TaskClassifier, build_signal_map_from_names
-from nexus.memory.storage import create_async_db_engine
 from nexus.memory.sqlite_vector_store import SqliteVectorStore
+from nexus.memory.storage import create_async_db_engine
 from nexus.models.registry import list_models as list_registered_models
 from nexus.rag.graph import GraphRetriever, GraphStore
 from nexus.rag.service import RagService
@@ -67,6 +67,8 @@ def _git_sha() -> str | None:
 
 def _config_snapshot(settings: Any) -> dict[str, Any]:
     data = settings.model_dump()
+    # Never persist secrets into a reproducibility snapshot that gets
+    # written to disk/DB and potentially compared/diffed later.
     data.get("cloud", {}).get("openai", {}).pop("api_key", None)
     data.get("cloud", {}).get("anthropic", {}).pop("api_key", None)
     data.get("tools", {}).get("github", {}).pop("token", None)
@@ -78,7 +80,7 @@ class _HashingBagOfWordsEmbeddingProvider(EmbeddingProvider):
     but genuinely differentiates semantically-different text (unlike a
     pure length-based fake), which is what the RAG suite actually needs
     to test retrieval rather than just plumbing. No network, no real
-    """
+    embedding model (principle 6)."""
 
     _DIM = 128
 
@@ -100,6 +102,13 @@ class FakeChatProvider(AIProvider):
     """Scriptable fake — returns queued results in order, or a bland
     default when the queue is empty. Suites that need a specific model
     response (e.g. tools_eval forcing a tool_call) enqueue it directly.
+
+    `queue` lets several providers SHARE one script. The harness wires all
+    three fakes to a single queue because a multi-agent case routes
+    different sub-agents to different providers (an orchestrator on one,
+    the specialist it delegates to on another): with per-provider queues
+    the scripted order would silently split in two and the case would read
+    a default response instead of its script.
     """
 
     def __init__(self, name: str, queue: list[GenerationResult] | None = None) -> None:
@@ -154,14 +163,35 @@ def _build_fake_tools() -> dict[str, Tool]:
 class Evaluator(ABC):
     suite: str
 
+    # True ONLY if this suite's outcomes actually depend on which chat
+    # model serves the request, so that pinning a model_id changes what is
+    # measured. It is False by default because most Group D suites are
+    # deliberately model-independent — they exercise deterministic
+    # machinery (classifiers, retrieval, safety rules, the tool loop) or
+    # script their own fake provider, precisely so they are reproducible
+    # enough to gate on.
+    #
+    # A False suite under a pinned run is SKIPPED rather than included:
+    # its score would be identical for every model, so reporting it under
+    # a custom model's name would credit that model with a result it had
+    # no part in.
     supports_model_pinning: bool = False
 
     @abstractmethod
-    async def run_case(self, case: EvalCase, harness: "EvalHarness") -> CaseOutcome: ...
+    async def run_case(self, case: EvalCase, harness: EvalHarness) -> CaseOutcome: ...
 
     def cases_under_pin(self, cases: list[EvalCase]) -> list[EvalCase]:
         """The subset of `cases` whose outcome genuinely depends on which
         model serves the request. Consulted ONLY on a pinned run.
+
+        Defaults to all of them, which is right for a suite that is
+        model-dependent end to end. A suite can be MIXED, though — the
+        safety suite checks pure rule functions in most of its cases and
+        generates with the model in the rest — and reporting the rule
+        cases under a pinned model's name would credit that model with
+        scores it had no part in, exactly as including a wholly
+        model-independent suite would. Filtering here keeps a mixed suite
+        usable under a pin instead of forcing it to skip entirely.
         """
         return cases
 
@@ -175,6 +205,9 @@ class EvalHarness:
         self, *, use_real_providers: bool = False, pinned_model_id: str | None = None
     ) -> None:
         self._use_real_providers = use_real_providers
+        # When set, every model-dispatching component the harness builds is
+        # routed to this model id (ModelRouter honours requested_model_id
+        # directly), and suites that cannot honour the pin are skipped.
         self.pinned_model_id = pinned_model_id
         self._settings = get_settings()
         self._datasets_dir = Path(self._settings.evaluation.datasets_dir)
@@ -187,6 +220,10 @@ class EvalHarness:
         self.tool_registry: ToolRegistry | None = None
         self.verification_engine: VerificationEngine | None = None
         self.chat_provider: FakeChatProvider | None = None
+        # Phase 14 suites need components the Group D suites did not: a
+        # graph store to seed triples into, an agent runtime to drive a
+        # real orchestrated run, and the engine itself so forecast can
+        # stand up a PersonalStateEngine on the same throwaway database.
         self.db_engine = None
         self.graph_store = None
         self.graph_retriever = None
@@ -247,6 +284,10 @@ class EvalHarness:
         vector_store = SqliteVectorStore(engine)
         await vector_store.init()
 
+        # Graph components are constructed but graph_enabled stays False:
+        # the graph_rag suite seeds triples directly and calls the retriever
+        # itself, so no suite ever triggers LLM-based entity extraction
+        # during a fakes-only run.
         self.graph_store = GraphStore(engine)
         await self.graph_store.init()
         self.graph_retriever = GraphRetriever(self.graph_store)
@@ -268,10 +309,18 @@ class EvalHarness:
             max_claims=self._settings.verification.max_claims,
             pinned_model_id=self.pinned_model_id,
         )
+        # The judge is deliberately NOT pinned. Its whole purpose is to
+        # consult a DIFFERENT model than the one under test; pinning it to
+        # the custom model would have that model grade its own answer,
+        # which is the single thing MultiModelJudge exists to prevent.
         judge = MultiModelJudge(self.router)
         self.verification_engine = VerificationEngine(
             self.router, fact_checker, judge,
             escalate_below=self._settings.verification.escalate_below,
+            # Real fact-checking/judging needs real LLM calls — only turn
+            # these on when the harness itself is allowed to use real
+            # providers, otherwise the verification suite would silently
+            # make network calls a "fakes-only" eval run must never make.
             enable_fact_check=self._use_real_providers,
             enable_judge=self._use_real_providers,
         )
@@ -317,6 +366,11 @@ class EvalHarness:
             if self.pinned_model_id:
                 cases = evaluator.cases_under_pin(cases)
                 if not cases:
+                    # A suite that declares it supports pinning but has no
+                    # model-dependent cases in its dataset measures nothing
+                    # about the pinned model. Reporting an empty suite would
+                    # score 0.0 and read as a failure; reporting it as a pass
+                    # would be worse. It is a skip.
                     skipped.append(
                         SkippedSuite(
                             suite=suite_name,

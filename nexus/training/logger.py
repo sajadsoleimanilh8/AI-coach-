@@ -16,6 +16,11 @@ class InteractionLogger:
     """Persists full request/response records for later training-data
     mining, following CostTracker's pattern (engine, async init(), async
     record()).
+
+    OFF by default via settings.training.log_interactions. When disabled
+    the caller skips construction entirely, but `enabled=False` is also
+    honored here so a wired-in logger can be turned off without unwiring
+    it — record() then writes nothing and returns None.
     """
 
     def __init__(self, engine: AsyncEngine, *, enabled: bool = False, retention_days: int = 180) -> None:
@@ -76,7 +81,7 @@ class InteractionLogger:
         answer 404 rather than silently accepting a rating that landed
         nowhere. Feedback is accepted even when logging is disabled — the
         record it points at was written while logging was on, and refusing
-        """
+        to rate it would lose real signal."""
         async with self._session_factory() as db:
             existing = await db.get(InteractionRecord, interaction_id)
             if existing is None:

@@ -1,21 +1,46 @@
 """
 Validates PITCH_KEYPOINTS_32 (ai/computer_vision/tactical_analysis/pitch_keypoints.py)
 against the calibration dataset's GROUND-TRUTH keypoint labels.
+
+WHY THIS EXISTS
+    pitch_keypoints.py's docstring cited "Reproduce with:
+    python -m scripts.validate_pitch_keypoints" and quoted a median
+    reprojection error of 0.247 m -- but the script did not exist in the
+    repo, so that number was unreproducible. This script is that missing
+    check, written so the claim can be confirmed or refuted rather than
+    taken on faith.
+
+WHAT IT ACTUALLY TESTS
+    The index -> pitch-metre TABLE, not the trained model. It reads the
+    dataset's own labelled keypoint pixel positions (flag=2 "visible"
+    only), fits a homography from those pixels to the table's pitch
+    metres, and reports how well every point reprojects.
+
+    A correct table produces sub-metre agreement across many independent
+    camera poses; a mis-assigned index scheme cannot, because each image
+    is a different projective view and a wrong correspondence set has no
+    single homography that satisfies it.
+
+    Model keypoint QUALITY is a separate question -- see
+    auto_calibration.py, which runs the trained model and is gated on
+    HOMOGRAPHY_CONFIDENCE_MIN precisely because the model can be wrong on
+    footage unlike its training domain even when this table is right.
+
+Usage:
+    python -m scripts.validate_pitch_keypoints
+    python -m scripts.validate_pitch_keypoints --split train --min-kpts 6
 """
 
 from __future__ import annotations
 
 import argparse
 import statistics
-import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from ai.computer_vision.tactical_analysis.homography import compute_homography  # noqa: E402
 from ai.computer_vision.tactical_analysis.pitch_keypoints import (  # noqa: E402
@@ -25,6 +50,11 @@ from ai.computer_vision.tactical_analysis.pitch_keypoints import (  # noqa: E402
 )
 from configs import registry  # noqa: E402
 
+# Ultralytics pose visibility flag: 2 = labelled AND visible, 1 = labelled
+# but occluded, 0 = not labelled. Only flag-2 points are trusted here --
+# an occluded landmark's pixel position is the annotator's guess, and
+# feeding guesses into a fit that is meant to VALIDATE the table would
+# make a wrong table look better than it is.
 VISIBLE_FLAG = 2
 
 
@@ -92,6 +122,10 @@ def main() -> int:
         if len(pixel_pts) < 4:
             skipped += 1
             continue
+        # RANSAC once there are more than the minimal 4: a single
+        # mislabelled landmark otherwise drags the whole fit and would be
+        # reported as evidence against the table rather than against that
+        # one annotation.
         method = cv2.RANSAC if len(pixel_pts) > 4 else 0
         try:
             res = compute_homography(np.array(pixel_pts), np.array(pitch_pts),
@@ -123,6 +157,8 @@ def main() -> int:
     for name, n, err in worst:
         print(f"  {err:8.3f} m  n={n:2d}  {name[:60]}")
 
+    # A correct table is the only way independent camera poses agree at
+    # this scale; treat >1 m median as a failure worth a non-zero exit.
     return 0 if statistics.median(errors) < 1.0 else 1
 
 

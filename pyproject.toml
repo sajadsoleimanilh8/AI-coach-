@@ -1,0 +1,132 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sports-strategy-coach-ai"
+version = "0.1.0"
+description = "Football match video analytics: detection, tracking, tactical scoring, and an LLM coaching layer."
+readme = "README.md"
+# license: not declared yet -- the owner has not chosen one. Add it with LICENSE.
+# 3.11 specifically. RUN.md explains why: mediapipe 0.10.14 has no wheels for
+# 3.13, and that is the pin the CV stack is built around.
+requires-python = ">=3.11,<3.13"
+
+# Base runtime: what both services need to import and serve. The heavy CV and
+# ML stack lives in the `cv` extra so the NEXUS service and CI lint jobs do not
+# have to pull torch.
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+    "pydantic-settings",
+    "python-dotenv",
+    "python-multipart",
+    "sqlalchemy",
+    "alembic",
+    "psycopg2-binary",
+    "aiosqlite",
+    "celery",
+    "redis>=4,<5",
+    "httpx",
+    "aiofiles",
+    "pyyaml",
+    "tiktoken",
+    "pypdf",
+    "python-docx",
+    "numpy",
+]
+
+[project.optional-dependencies]
+# NOTE: torch/torchvision need --extra-index-url for the CUDA build, which
+# cannot be expressed here. backend/requirements-full.txt remains the
+# authoritative install path for a GPU machine; this extra covers the rest.
+cv = [
+    "opencv-python",
+    "scipy",
+    "ultralytics",
+    "mediapipe==0.10.14",
+]
+dev = [
+    "ruff",
+    "mypy",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+]
+
+[tool.setuptools.packages.find]
+# ai/ is an implicit namespace package (no __init__.py anywhere in the tree),
+# so namespace discovery is required or `import ai.computer_vision` breaks.
+where = ["."]
+include = ["ai*", "backend*", "nexus*", "configs*"]
+exclude = ["venv*", "*.tests", "frontend*", "storage*", "runs*", "datasets*", "models*", "samples*"]
+namespaces = true
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [
+    "venv",
+    ".claude/worktrees",   # a full stale second checkout; linting it is noise
+    "frontend",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "C4",   # comprehensions
+    "SIM",  # simplify
+    "BLE",  # blind except -- the codebase already annotates these with noqa
+    "T20",  # print found
+]
+ignore = [
+    "E501",    # line length is handled by the formatter, not enforced here
+    "B008",    # FastAPI's Depends() in defaults is the documented idiom
+    "SIM108",  # ternaries are not always clearer than an if/else
+    # Stylistic rules that would churn hundreds of working lines for no
+    # behavioural gain. Revisit individually; do not treat as endorsements.
+    "B905",    # zip() without strict=
+    "C401", "C408", "C416",
+    "SIM102", "SIM105", "SIM117",
+    "UP028", "UP031", "UP042",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# CLIs: printing to stdout is their interface, and a top-level except that
+# reports and exits is correct behaviour for a one-shot script.
+"scripts/*" = ["T20", "BLE001", "E701", "E702"]
+"training/*" = ["T20"]
+"**/tests/*" = ["T20"]
+"conftest.py" = ["T20", "BLE001"]
+# Individual CLI entry points that live inside library packages. Listed file by
+# file on purpose -- a glob over ai/** or nexus/** would let print() creep back
+# into library code unnoticed.
+"ai/computer_vision/train_common.py" = ["T20"]
+"ai/computer_vision/train_parts.py" = ["T20"]
+"ai/computer_vision/tactical_analysis/manual_calibration.py" = ["T20"]
+"ai/computer_vision/tactical_analysis/pitch_landmarks.py" = ["T20"]
+"nexus/evaluation/cli.py" = ["T20"]
+"nexus/training/*.py" = ["T20"]
+"nexus/training/templates/*.py" = ["T20"]
+
+[tool.mypy]
+python_version = "3.11"
+# Deliberately a low baseline to start. 70% of functions already carry return
+# annotations, so the discipline exists -- this makes it checkable, then the
+# strictness ratchets up over time rather than landing 2000 errors at once.
+ignore_missing_imports = true
+# ai/ is a namespace package with many same-named leaf modules (score.py,
+# constants.py ...); without explicit bases mypy sees them as duplicates.
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "."
+follow_imports = "silent"
+warn_unused_configs = true
+warn_redundant_casts = true
+no_implicit_optional = true
+exclude = '(^venv/|^\.claude/worktrees/|^frontend/)'

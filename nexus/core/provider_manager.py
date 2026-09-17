@@ -11,7 +11,14 @@ logger = get_logger("core.provider_manager")
 
 
 class ProviderManager:
-    """Owns all registered AIProvider instances (local + cloud)."""
+    """Owns all registered AIProvider instances (local + cloud).
+
+    Dict keys are the model registry's provider identifiers ("local",
+    "openai", "anthropic" — see models.yaml), not necessarily each
+    provider's own `.name` attribute (OllamaRuntime keeps `name = "ollama"`
+    from Phase 1), so routing decisions and registry lookups always agree on
+    the same vocabulary.
+    """
 
     def __init__(self, providers: dict[str, AIProvider]) -> None:
         self._providers = providers

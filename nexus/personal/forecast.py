@@ -16,6 +16,9 @@ _DEFAULT_MIN_TREND_CONFIDENCE = 0.5
 _DEFAULT_TREND_WINDOW_DAYS = 90.0
 _DEFAULT_MIN_SAMPLES = 4
 
+# Confidence halves every two weeks of horizon. A linear fit over recorded
+# signals says less and less about the future the further out it is pushed,
+# and the reported number has to fall the same way or it overstates itself.
 _CONFIDENCE_HALF_LIFE_DAYS = 14.0
 
 _EXTRAPOLATION_CAVEAT = (
@@ -56,6 +59,11 @@ class StateForecaster:
     """Projects each dimension forward along the slope compute_trend()
     already fits. Pure arithmetic — no model call, in line with the rest of
     nexus/personal/.
+
+    Where the data is too thin, the answer is method="insufficient_data"
+    and no number at all. That is the same discipline
+    build_personal_context_message() follows: no data means say nothing,
+    not produce a confident-looking default.
     """
 
     def __init__(
@@ -74,6 +82,9 @@ class StateForecaster:
         self._trend_min_samples = trend_min_samples
 
     async def forecast(self, user_id: str, *, horizon_days: int = 14) -> ForecastResult:
+        # Hard cap rather than an error: a caller asking for 90 days gets 30
+        # days of honest extrapolation instead of a rejection, and the
+        # response says what horizon it actually used.
         effective_horizon = max(1, min(horizon_days, self._max_horizon_days))
 
         state = await self._state_engine.get_state(user_id)
@@ -108,6 +119,9 @@ class StateForecaster:
             )
 
         raw_projection = current + trend.slope * horizon_days
+        # Every dimension is defined on [0, 1]; a long enough horizon on a
+        # steep slope walks straight out of that range, and reporting 1.4
+        # would be reporting a value the scale cannot hold.
         projected = min(1.0, max(0.0, raw_projection))
 
         confidence = trend.confidence * (0.5 ** (horizon_days / _CONFIDENCE_HALF_LIFE_DAYS))
@@ -152,6 +166,11 @@ class SimulationResult:
 class ScenarioSimulator:
     """Answers "what if sleep_consistency improved by 0.2?" by applying the
     delta and re-running the EXISTING WeaknessEngine thresholds.
+
+    Purely mechanical and says so: dimensions in this model are not wired
+    to each other causally, so improving one cannot be reported as
+    improving another. Anything beyond "this weakness would no longer trip
+    its threshold" would be a causal claim this system has no basis for.
     """
 
     def __init__(
@@ -181,6 +200,11 @@ class ScenarioSimulator:
                 still_flagged.append(weakness.dimension)
                 continue
 
+            # A delta is stated in the dimension's own "better" direction,
+            # so it is added to the raw value and re-sign-corrected through
+            # the same helper WeaknessEngine uses — on an inverted
+            # dimension, "improve by 0.2" therefore means the raw value
+            # falls, not rises.
             adjusted_value = min(1.0, max(0.0, weakness.current + self._directional(weakness.dimension, delta)))
             deviation_after = sign_corrected_deviation(
                 weakness.dimension, adjusted_value, baseline.value

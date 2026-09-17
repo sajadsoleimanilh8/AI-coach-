@@ -51,20 +51,27 @@ class VerificationEngine:
         task_type: TaskType,
         evidence=None,
     ) -> VerificationReport:
+        # Step 1: deterministic checks always run — they're free (no LLM
+        # call), so there's no cost reason to gate them behind anything.
         context = CheckContext(text=answer, evidence=evidence)
         checks: list[CheckResult] = [check(context) for check in DETERMINISTIC_CHECKS]
 
         extra_usage = Usage()
         escalated = False
 
+        # Step 2: model-based claim extraction + checking, opt-in (costs tokens).
         if self._enable_fact_check:
             fact_check_results, fact_check_usage = await self._fact_checker.run(answer, evidence)
             checks.extend(fact_check_results)
             extra_usage = _add_usage(extra_usage, fact_check_usage)
 
+        # Step 3: composite score/band from everything computed so far.
         score = score_checks(checks)
         band = band_for_score(score)
 
+        # Step 4: escalate to a second model only when confidence is low
+        # (or entirely unverified) — this is the expensive step, so it's
+        # gated on actually needing it, not run unconditionally.
         if self._enable_judge and (score is None or score < self._escalate_below):
             escalated = True
             verdict = await self._judge.judge(
@@ -98,6 +105,9 @@ class VerificationEngine:
                             evidence=[verdict.disagreement_summary] if verdict.disagreement_summary else [],
                         )
                     )
+            # Recomputed AFTER the judge's check lands — escalation exists
+            # to move the final verdict, not to sit alongside a stale
+            # pre-escalation score.
             score = score_checks(checks)
             band = band_for_score(score)
 

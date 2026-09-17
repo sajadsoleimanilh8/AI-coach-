@@ -1,18 +1,20 @@
 """
 Unit tests for the Pre-Match Health Intelligence engine
 (ai/performance_ai/match_readiness_predictor/).
+
+Same conventions as ai/player_intelligence/tests/test_player_intelligence.py.
+
+The three named scenarios below assert properties that follow from the
+formulas in scorer.py (bands, orderings, directions) rather than literal
+magic numbers, so tuning a constant in constants.py does not invalidate a
+test that was never really about that constant. Where a literal IS asserted,
+it is hand-computed from the formula and shown in a comment.
 """
 
-import os
-import sys
-
-import pytest
-
-repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-if repo_root not in sys.path:
-    sys.path.insert(0, repo_root)
 
 from datetime import time
+
+import pytest
 
 from ai.performance_ai.match_readiness_predictor.constants import (
     FATIGUE_WEIGHTS,
@@ -37,8 +39,9 @@ from ai.performance_ai.match_readiness_predictor.scorer import (
 )
 
 
-
-
+# ---------------------------------------------------------------------------
+# Scenario fixtures -- the three named cases from the spec
+# ---------------------------------------------------------------------------
 def healthy_questionnaire(**overrides) -> PreMatchQuestionnaireInput:
     """Well-slept, unfatigued, no recent load."""
     base = dict(
@@ -120,8 +123,10 @@ def mixed_questionnaire(**overrides) -> PreMatchQuestionnaireInput:
     return PreMatchQuestionnaireInput(**base)
 
 
-
-
+# ---------------------------------------------------------------------------
+# Weighting sanity -- every composite's weights must sum to 1.0, or a score
+# that looks like it is on a 0-100 scale quietly is not.
+# ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "weights",
     [
@@ -137,8 +142,9 @@ def test_weight_sets_sum_to_one(weights):
     assert sum(weights.values()) == pytest.approx(1.0)
 
 
-
-
+# ---------------------------------------------------------------------------
+# Feature extraction
+# ---------------------------------------------------------------------------
 def test_features_are_bounded_0_100():
     for q in (healthy_questionnaire(), fatigued_questionnaire(), mixed_questionnaire()):
         vector = extract_features(q).as_dict()
@@ -157,6 +163,7 @@ def test_every_scored_feature_declares_a_direction():
 
 
 def test_sleep_duration_normalizes_between_the_3h_floor_and_the_8h_target():
+    # Linear on [3h, 8h]: 3h -> 0, 5.5h -> 50, 8h -> 100, and capped above.
     def duration(hours):
         return extract_features(healthy_questionnaire(sleep_duration_hours=hours)).sleep_duration
 
@@ -189,7 +196,7 @@ def test_recent_load_falls_as_hours_since_training_grows():
     ]
     assert loads == sorted(loads, reverse=True)
     assert loads[0] > 0
-    assert loads[-1] == 0.0
+    assert loads[-1] == 0.0  # fully decayed at/after TRAINING_RECENCY_DECAY_HOURS
 
 
 def test_recent_load_rises_with_duration_and_intensity():
@@ -201,6 +208,8 @@ def test_recent_load_rises_with_duration_and_intensity():
 def test_time_in_bed_and_efficiency_are_informational_only():
     """Changing only bedtime/wake_time must not move any score -- a single
     questionnaire has no baseline to judge sleep timing against."""
+    # Two genuinely different windows (9h in bed vs. 10.5h), same reported
+    # sleep_duration_hours -- only the timing differs.
     a = score_match_readiness(healthy_questionnaire(bedtime=time(22, 0), wake_time=time(7, 0)))
     b = score_match_readiness(healthy_questionnaire(bedtime=time(0, 30), wake_time=time(11, 0)))
     assert a.features.time_in_bed_hours != b.features.time_in_bed_hours
@@ -221,8 +230,9 @@ def test_sleep_efficiency_capped_at_100_when_self_report_exceeds_time_in_bed():
     assert f.sleep_efficiency_pct == 100.0
 
 
-
-
+# ---------------------------------------------------------------------------
+# Free text must never affect a score
+# ---------------------------------------------------------------------------
 def test_notes_are_carried_through_but_never_scored():
     without = score_match_readiness(healthy_questionnaire())
     with_notes = score_match_readiness(
@@ -238,15 +248,25 @@ def test_notes_are_carried_through_but_never_scored():
     assert with_notes.workload_risk == without.workload_risk
 
 
-
-
+# ---------------------------------------------------------------------------
+# Named scenario: Healthy
+# ---------------------------------------------------------------------------
 def test_healthy_scenario():
     result = score_match_readiness(healthy_questionnaire())
 
+    # Hand-computed from the formulas in scorer.py:
+    #   recovery = .30*(100-20) + .25*(100-20) + .25*(100-10) + .20*90
+    #            = 24 + 20 + 22.5 + 18 = 84.5
     assert result.recovery_score == pytest.approx(84.5)
 
+    #   sleep_score = .55*100 + .35*90 + .10*100 = 55 + 31.5 + 10 = 96.5
+    #   sleep_debt  = 3.5
+    #   fatigue = .40*20 + .35*0 + .15*3.5 + .10*0 = 8 + 0.525 = 8.525 -> 8.5
     assert result.fatigue_score == pytest.approx(8.5, abs=0.1)
 
+    #   readiness = .30*84.5 + .25*(100-8.5) + .15*100 + .10*(.75*90 + .25*100)
+    #               + .20*90 - 0  (no load penalty: recent load is 0)
+    #             = 25.35 + 22.875 + 15 + 9.25 + 18 = 90.475 -> 90.5
     assert result.physical_readiness == pytest.approx(90.5, abs=0.2)
 
     assert result.physical_readiness >= 75
@@ -256,8 +276,9 @@ def test_healthy_scenario():
     assert result.key_negative_factors() == []
 
 
-
-
+# ---------------------------------------------------------------------------
+# Named scenario: Fatigued
+# ---------------------------------------------------------------------------
 def test_fatigued_scenario():
     result = score_match_readiness(fatigued_questionnaire())
 
@@ -280,8 +301,10 @@ def test_fatigued_scores_worse_than_healthy_on_every_headline():
     assert fatigued.fatigue_score > healthy.fatigue_score
 
 
-
-
+# ---------------------------------------------------------------------------
+# Named scenario: Mixed -- asserted as an ordering, not a literal, so the
+# test survives constant tuning.
+# ---------------------------------------------------------------------------
 def test_mixed_scenario_sits_strictly_between_healthy_and_fatigued():
     healthy = score_match_readiness(healthy_questionnaire())
     mixed = score_match_readiness(mixed_questionnaire())
@@ -299,8 +322,9 @@ def test_mixed_scenario_reports_both_a_positive_and_a_negative_factor():
     assert "high recent training load" in mixed.key_negative_factors()
 
 
-
-
+# ---------------------------------------------------------------------------
+# Risk banding
+# ---------------------------------------------------------------------------
 def test_performance_risk_bands_match_the_readiness_thresholds():
     for q in (healthy_questionnaire(), mixed_questionnaire(), fatigued_questionnaire()):
         result = score_match_readiness(q)
@@ -356,8 +380,9 @@ def test_workload_risk_low_on_a_light_session_with_no_high_intensity_work():
     assert result.workload_risk == "low"
 
 
-
-
+# ---------------------------------------------------------------------------
+# Determinism and the scorer interface
+# ---------------------------------------------------------------------------
 def test_same_input_twice_gives_identical_output():
     for factory in (healthy_questionnaire, mixed_questionnaire, fatigued_questionnaire):
         first = score_match_readiness(factory())
@@ -425,8 +450,9 @@ def test_every_dimension_is_classified():
         assert 0.0 <= factor.score <= 100.0
 
 
-
-
+# ---------------------------------------------------------------------------
+# Validation -- out of range must be rejected, never clamped
+# ---------------------------------------------------------------------------
 SCALE_FIELDS = [
     "sleep_quality",
     "training_intensity",

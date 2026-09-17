@@ -13,9 +13,15 @@ from nexus.sports.timeline import TIMELINE_PATH, TacticalTimeline, parse_timelin
 @dataclass
 class SportsMetric:
     metric_name: str
+    # The football pipeline's own contract splits TeamMetric.value into
+    # value_numeric/value_label (see backend/database/models.py) because a
+    # metric like "formation" is genuinely categorical ("4-3-3"), not a
+    # number — typing this float-only would silently corrupt or drop that
+    # data on ingest, exactly the "coerce instead of preserve" mistake
+    # principle 6 forbids.
     value: float | str | None
     method: str
-    confidence: str
+    confidence: str  # "normal" | "low_sample" | "low_upstream_confidence"
     sample_size: int
     sub_scores: dict[str, Any]
     player_id: int | None = None
@@ -91,6 +97,16 @@ class HttpSportsDataAdapter(SportsDataAdapter):
     (backend/api/*) over HTTP rather than importing its models or querying
     its database directly. This is the one integration seam nexus/ has
     into that system — HTTP keeps the two codebases decoupled (NEXUS never
+    imports from backend/ or ai/, so it stays independently deployable,
+    and can point at a remote football backend instance instead of a
+    co-located one) at the cost of a network round trip, which is a
+    trade this module is happy to make for that decoupling.
+
+    Every metric returned by the football backend already distinguishes
+    "computed and trustworthy" from "computed but low-confidence" from
+    "genuinely unavailable" (MetricConfidence.low_upstream_confidence,
+    value=None) — this adapter's only job is to preserve that distinction
+    end to end (SportsMetric.is_available), never collapse it.
     """
 
     def __init__(
@@ -102,7 +118,7 @@ class HttpSportsDataAdapter(SportsDataAdapter):
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
-        self._transport = transport
+        self._transport = transport  # test seam: inject httpx.MockTransport
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
@@ -120,6 +136,12 @@ class HttpSportsDataAdapter(SportsDataAdapter):
         return response.json()
 
     async def _get_formation(self, client: httpx.AsyncClient, match_id: str) -> SportsMetric | None:
+        # A 404 here means "no formation computed yet for this match" (see
+        # backend/api/tactical.py's own comment on why it refuses to
+        # fabricate a placeholder formation) — that is normal, expected
+        # state, not a backend outage, so it must NOT raise
+        # ProviderUnavailableError the way a connection failure or a 5xx
+        # does.
         try:
             response = await client.get(f"/api/tactical/formation/{match_id}")
         except httpx.HTTPError as exc:

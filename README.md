@@ -40,12 +40,13 @@ else.
 
 ```
 python -m scripts.dataset_qa            # audit every dataset -> docs/dataset_audit/
-python -m training.train_player         # one trainer per model
-python -m training.train_ball
-python -m training.train_field
-python -m training.train_calibration
-python -m training.train_goalpost
+python -m training.train player         # any model in configs/models.yaml
+python -m training.train ball --part 1 --total-parts 4   # phased: one Part at a time
+python -m training.train ball --status
 ```
+
+`python -m training.train_player` (and `train_ball`, `train_field`,
+`train_calibration`, `train_goalpost`) still work and are equivalent.
 
 Set `SSC_DATASET_ROOT` to relocate the datasets (defaults to
 `D:/SportsStrategyCoachAI/datasets/processed` on Windows) and `SSC_MODEL_ROOT`
@@ -56,5 +57,6 @@ one `$YOLO_MODEL_PATH`; see
 [docs/pipeline_architecture.md](docs/pipeline_architecture.md) for what
 changed and why.
 
-Module folders under `ai/` without an implementation are scaffolded per the
-platform blueprint and are ready for later phases.
+`ai/` holds only modules that are actually implemented. The blueprint slots
+that have no code are listed in [ai/README.md](ai/README.md), which is the
+record of the gap between the blueprint and the code.

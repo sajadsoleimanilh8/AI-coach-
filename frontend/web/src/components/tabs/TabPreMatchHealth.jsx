@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import api from '../../api/client.js';
 import { useAction, useAsync } from '../../hooks/useAsync.js';
@@ -30,7 +30,20 @@ import {
   ToggleField,
 } from '../ui/Form.jsx';
 
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+/**
+ * TAB 6 -- the pre-match physical readiness questionnaire.
+ *
+ * Every field of PreMatchQuestionnaireRequest is here, with the client-side
+ * ranges matching the server's Field(ge=/le=) constraints exactly. The point
+ * of matching them is that an out-of-range answer is a 422 by design (never
+ * silently clamped), so the form should not be able to produce one by
+ * accident -- and when the server does reject something, its `detail` is
+ * rendered verbatim rather than replaced with a generic message.
+ *
+ * `disclaimer` from the response is always rendered. This is a
+ * performance-readiness estimate from a self-report; it is not a medical
+ * assessment.
+ */
 
 const INITIAL = {
   sleep_duration_hours: 8,
@@ -72,9 +85,9 @@ export default function TabPreMatchHealth({ matchId }) {
     if (!id) return;
 
     const body = { ...form };
-                                                                        
-                                                                            
-                                                          
+    // Only sent when the user opted in and a match actually exists: the
+    // endpoint refuses a dangling match reference with a 404, and a genuine
+    // pre-match submission legitimately has no match yet.
     body.match_id = attachMatch && matchId ? matchId : null;
 
     const result = await submit.run({ playerId: id, body });
@@ -297,7 +310,7 @@ export default function TabPreMatchHealth({ matchId }) {
   );
 }
 
-                                                                          
+/* ==================================================================== */
 
 function ResultPanel({ state }) {
   if (state.status === 'idle') {
@@ -412,7 +425,7 @@ export function AssessmentView({ assessment }) {
   );
 }
 
-                                                                          
+/* ==================================================================== */
 
 function HistoryPanel({ playerId }) {
   const [limit, setLimit] = useState(10);

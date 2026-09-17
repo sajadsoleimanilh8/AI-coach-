@@ -1,16 +1,26 @@
 """
 Regenerates docs/pipeline_latency_profile.md from REAL PipelineLatencyReport
 data written by backend/tasks.py during an actual pipeline run.
+
+This script is the only thing that may write that file. Hand-typed,
+precise-looking per-stage numbers with no instrumentation behind them are a
+fabricated benchmark, not a measured one.
+
+Usage (after at least one job has completed successfully):
+    python3 scripts/generate_latency_report.py [--job-id JOB_ID] [--last N]
+
+If no job has completed yet, this refuses to write placeholder numbers --
+it writes an honest "no runs yet" doc instead and exits non-zero, so CI or
+a pre-demo checklist can catch "we never actually profiled this" instead
+of silently shipping stale/fake numbers.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend.database.models import AnalysisResult, ProcessingJob, ProcessingStatus  # noqa: E402
 from backend.database.session import SessionLocal  # noqa: E402
@@ -93,7 +103,7 @@ def generate(job_id: str | None = None) -> int:
 
         if result is None or "pipeline_latency" not in (result.result_json or {}):
             DOC_PATH.write_text(NO_DATA_TEMPLATE.format(
-                generated_at=datetime.now(timezone.utc).isoformat()
+                generated_at=datetime.now(UTC).isoformat()
             ))
             print(f"No completed run with a latency report found. Wrote placeholder to {DOC_PATH}.")
             return 1

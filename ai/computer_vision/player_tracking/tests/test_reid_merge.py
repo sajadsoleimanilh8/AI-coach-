@@ -93,7 +93,7 @@ def test_deterministic_across_runs(monkeypatch):
             frames[f].append(_det(f, 4, 600.0 - 4 * f, 400.0))
         return frames
 
-    teams = {i: "team-home" for i in (1, 2, 3, 4)}
+    teams = dict.fromkeys((1, 2, 3, 4), "team-home")
     first, second = build(), build()
     _force_merge(monkeypatch, teams=teams)
     merge_reidentified_tracks("unused.mp4", first, fps=25.0)

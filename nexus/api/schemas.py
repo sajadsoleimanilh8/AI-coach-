@@ -20,6 +20,9 @@ class ChatRequest(BaseModel):
     max_tokens: int | None = None
     stream: bool = False
     policy: RoutingPolicy | None = None
+    # No auth system yet (deferred) — user_id is a plain client-supplied
+    # scoping key for documents/long-term memory, same as session_id is
+    # for conversation history.
     user_id: str = "default"
     use_rag: bool = False
     rag_top_k: int = 5
@@ -80,6 +83,8 @@ class ChatResponse(BaseModel):
     tool_calls_made: list[ToolCallSummary] | None = None
     personal_context_used: bool | None = None
     verification: VerificationReportSchema | None = None
+    # None whenever interaction logging is off (the default) — there is no
+    # record to rate, so POST /api/feedback has nothing to point at.
     interaction_id: int | None = None
 
 
@@ -141,6 +146,10 @@ class AgentRunRequest(BaseModel):
     user_id: str = "default"
     session_id: str | None = None
     max_iterations: int | None = None
+    # Only consumed by SportsAgent (nexus/agents/sports.py) — ignored by
+    # every other agent. Optional rather than a SportsAgent-specific
+    # request schema since /api/agents/{name}/run is one generic endpoint
+    # for every registered agent.
     match_id: str | None = None
     player_id: int | None = None
 
@@ -171,6 +180,8 @@ class AgentRunResponse(BaseModel):
     cost_usd: float | None = None
     model_used: str | None = None
     provider_name: str | None = None
+    # Empty for every non-delegating agent, so the delegation tree is
+    # inspectable without changing what a plain agent run returns.
     delegation_steps: list[DelegationStepSchema] = []
     rounds_used: int = 1
 
@@ -462,18 +473,29 @@ class PreMatchCoachReportResponse(BaseModel):
 
 
 class PsychologyCoachReportResponse(BaseModel):
-    """`narrative` is the only LLM-generated field."""
+    """`narrative` is the only LLM-generated field.
+
+    Every number here was computed deterministically by the football backend's
+    ai/psychology_ai/ engine and is passed through unchanged; the factor lists
+    are derived from it in pure Python by nexus/sports/psychology.py. NEXUS
+    never recomputes any of it.
+
+    A mental-READINESS estimate from a self-report: not emotion detection, not
+    a psychological or clinical assessment, not a diagnosis.
+    """
     player_id: str
     match_id: str | None = None
     mental_readiness: int
     focus: int
     confidence: int
-    stress: int
+    stress: int  # higher = more reported stress
     pressure_risk: str
     mental_performance_risk: str
     key_positive_factors: list[str]
     key_negative_factors: list[str]
     narrative: str
+    # Additive beyond the core contract, for a consumer that wants the full
+    # picture rather than just the two summary lists.
     neutral_factors: list[str] = []
     method: str = ""
     confidence_level: str = ""

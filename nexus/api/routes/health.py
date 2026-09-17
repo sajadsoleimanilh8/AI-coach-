@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 
 from nexus.api.schemas import HealthResponse
+from nexus.api.services import get_services
 from nexus.core.provider_manager import ProviderManager
 
 router = APIRouter()
@@ -10,7 +11,7 @@ router = APIRouter()
 
 @router.get("/health", response_model=HealthResponse)
 async def health(request: Request) -> HealthResponse:
-    provider_manager: ProviderManager = request.app.state.provider_manager
+    provider_manager: ProviderManager = get_services(request).provider_manager
     provider_statuses = await provider_manager.health_check_all()
 
     local_models: list[str] = []

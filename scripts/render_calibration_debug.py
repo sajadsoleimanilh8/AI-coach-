@@ -1,24 +1,36 @@
-"""Render the calibration debugger without starting the API server."""
+"""Render the calibration debugger without starting the API server.
+
+Examples:
+  python -m scripts.render_calibration_debug --image frame.jpg --output debug.png
+  python -m scripts.render_calibration_debug --video clip.mp4 --frame 120 --output debug.png
+  python -m scripts.render_calibration_debug --video clip.mp4 --frame 300 \
+      --with-players --output debug.png
+"""
 from __future__ import annotations
 
 import argparse
 import json
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from backend.api.calibration_debug import _read_frame, render_calibration_debug  # noqa: E402
 
 
 @dataclass
 class _DebugPlayer:
-    """The three fields render_calibration_debug() reads off a detection."""
+    """The three fields render_calibration_debug() reads off a detection.
+
+    `pixel_x/pixel_y` are the FOOT POINT (bottom-centre of the box), not
+    the box centre -- the same anchor trajectory.py uses, and the reason a
+    projected position is trustworthy at all (see pipeline_architecture.md
+    6.4: 6.7 m of error avoided on a 40x110 px box). Using the centre here
+    would make the debugger disagree with the pipeline it is meant to
+    diagnose.
+    """
     player_id: int
     pixel_x: float
     pixel_y: float

@@ -52,6 +52,7 @@ class WebSearchTool(Tool):
     an unofficial scrape of a public HTML page: DuckDuckGo doesn't publish
     a rate limit or ToS contract for it, so keep call volume low and treat
     parser breakage (if their markup changes) as expected maintenance, not
+    a bug in NEXUS.
     """
 
     name = "web_search"
@@ -71,7 +72,7 @@ class WebSearchTool(Tool):
     ) -> None:
         self._max_results = max_results
         self._timeout_seconds = timeout_seconds
-        self._transport = transport
+        self._transport = transport  # test seam: inject httpx.MockTransport
 
     async def execute(self, arguments: dict[str, Any]) -> ToolResult:
         query = arguments.get("query") or ""

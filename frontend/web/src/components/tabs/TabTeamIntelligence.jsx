@@ -19,13 +19,21 @@ import {
 import { AsyncBlock, EmptyState } from '../ui/States.jsx';
 import { SelectMatchState } from '../ui/MatchPicker.jsx';
 
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
+/**
+ * TAB 3 -- team-level tactical output: detected formation, team shape over
+ * time, and the general team-intelligence feed from ai/team_intelligence/*.
+ *
+ * All three sections stay on screen even when empty. The formation endpoint
+ * in particular returns a 404 rather than a plausible-looking fallback
+ * (backend/api/tactical.py deliberately stopped fabricating "4-3-3"), and
+ * this tab renders that 404 as the stated empty state it is.
+ */
 export default function TabTeamIntelligence({ matchId, goToTab, onAttachMatch }) {
   const [teamId, setTeamId] = useState('');
 
-                                                                             
-                                                                            
-                                                            
+  // The general feed is not team-scoped and returns every team's rows, which
+  // makes it the honest source for "which team ids does this match actually
+  // have?" -- far better than assuming a naming convention.
   const teamIntel = useAsync(
     (signal) => api.getTeamIntelligence(matchId, signal),
     [matchId],
@@ -37,8 +45,8 @@ export default function TabTeamIntelligence({ matchId, goToTab, onAttachMatch })
     return [...new Set(teamIntel.data.map((metric) => metric.team_id).filter(Boolean))];
   }, [teamIntel.data]);
 
-                                                                          
-                                                                   
+  // Adopt the first real team id once it is known, instead of leaving the
+  // formation call pointed at the endpoint's "unassigned" default.
   useEffect(() => {
     if (!teamId && availableTeams.length) setTeamId(availableTeams[0]);
   }, [availableTeams, teamId]);
@@ -127,10 +135,10 @@ export default function TabTeamIntelligence({ matchId, goToTab, onAttachMatch })
   );
 }
 
-                                                                          
+/* ==================================================================== */
 
 function FormationPanel({ state }) {
-                                                                    
+  // 404 is the endpoint's honest "not computed yet", not a failure.
   if (state.status === 'error' && state.error?.notFound) {
     return (
       <Slab>
@@ -191,7 +199,7 @@ function FormationPanel({ state }) {
   );
 }
 
-                                                                          
+/* ==================================================================== */
 
 function TeamShapePanel({ state }) {
   return (
@@ -221,7 +229,11 @@ function TeamIntelPanel({ state }) {
   );
 }
 
-                                                                                                                                                                                                                                               
+/**
+ * The team-intelligence feed mixes several teams into one flat list, so it is
+ * grouped by team_id rather than shown as an undifferentiated pile of cards
+ * where "compactness_score" appears twice with no way to tell whose it is.
+ */
 function GroupedTeamMetrics({ metrics }) {
   const groups = useMemo(() => {
     const map = new Map();
@@ -269,8 +281,8 @@ function TeamMetricCard({ number, metric }) {
     .replace(/\b\w/g, (character) => character.toUpperCase());
 
   const hasValue = metric.value !== null && metric.value !== undefined && metric.value !== '';
-                                                                   
-                                                                           
+  // TeamMetric.value resolves to either a number or a label string
+  // (value_numeric / value_label), so both shapes have to render sensibly.
   const isNumeric = typeof metric.value === 'number';
 
   return (

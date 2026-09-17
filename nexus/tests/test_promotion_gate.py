@@ -1,5 +1,14 @@
 """The promotion gate — that a pinned eval run measures the model it
 names, and declines rather than guesses when it cannot.
+
+Until the fixes these tests lock in, `evaluate_custom_model(model_id)` ran
+a NORMAL-routing evaluation and stamped `model_id` on the result
+afterwards: it reported a measurement of a model it had never called. The
+tests here exist to make that specific lie impossible to reintroduce, so
+they assert on the dispatch (which model_id reached a provider) rather
+than on scores, which would pass just as happily under the old bug.
+
+No GPU, no torch, no network: every provider here is a local recorder.
 """
 
 from __future__ import annotations
@@ -70,6 +79,10 @@ def _router_with_recorders() -> tuple[ModelRouter, dict[str, _RecordingProvider]
     """A REAL ModelRouter over the real model registry, with recorders
     standing in for every provider. Real router on purpose — the pin is
     honoured by ModelRouter.route(), so a fake router would test the test."""
+    # Derived from the registry rather than hardcoded: this test is
+    # parametrised over every registered chat model, so a hardcoded provider
+    # list silently turns "a new provider was added" into a KeyError here
+    # instead of a real finding.
     recorders = {
         name: _RecordingProvider(name)
         for name in sorted({m.provider for m in list_registered_models()})
@@ -88,6 +101,10 @@ def _dispatched_model_ids(recorders: dict[str, _RecordingProvider]) -> list[str]
 @pytest.mark.asyncio
 @pytest.mark.parametrize("pinned", _registered_chat_model_ids())
 async def test_pinned_model_id_is_what_reaches_the_provider(pinned: str) -> None:
+    # Parametrised across every registered chat model so the assertion
+    # cannot pass by coincidence: whatever the router would have picked on
+    # its own, it can only be the default for ONE of these ids, so an
+    # ignored pin fails the rest.
     router, recorders = _router_with_recorders()
     checker = FactChecker(router, pinned_model_id=pinned)
 
@@ -98,6 +115,10 @@ async def test_pinned_model_id_is_what_reaches_the_provider(pinned: str) -> None
 
 @pytest.mark.asyncio
 async def test_without_a_pin_dispatch_is_left_to_routing() -> None:
+    # The control case. If an unpinned checker dispatched the same id as a
+    # pinned one no matter what, the test above would prove nothing about
+    # the pin — so at least one registered model must be reachable ONLY by
+    # pinning it.
     router, recorders = _router_with_recorders()
 
     await FactChecker(router).extract_claims("Arsenal are based in London.")
@@ -109,6 +130,10 @@ async def test_without_a_pin_dispatch_is_left_to_routing() -> None:
 
 @pytest.mark.asyncio
 async def test_harness_threads_the_pin_into_the_fact_checker(_memory_db_env: str) -> None:
+    # The wiring the gate depends on: EvalHarness must hand its pin to the
+    # component that actually dispatches to a model. Asserted through the
+    # harness's own constructed objects rather than by re-running a suite,
+    # because under fakes the fact-check path is deliberately disabled.
     harness = EvalHarness(use_real_providers=False, pinned_model_id="mistral:7b")
     await harness.setup()
 
@@ -118,6 +143,10 @@ async def test_harness_threads_the_pin_into_the_fact_checker(_memory_db_env: str
 
 @pytest.mark.asyncio
 async def test_the_judge_is_never_pinned_to_the_model_under_test(_memory_db_env: str) -> None:
+    # MultiModelJudge exists to get a SECOND opinion. Pinning it to the
+    # model under test would have that model grade its own answer, which
+    # is the one thing the judge is there to prevent — so the pin must
+    # stop at the fact checker.
     harness = EvalHarness(use_real_providers=False, pinned_model_id="mistral:7b")
     await harness.setup()
 
@@ -127,6 +156,10 @@ async def test_the_judge_is_never_pinned_to_the_model_under_test(_memory_db_env:
 
 @pytest.mark.asyncio
 async def test_suites_that_cannot_honour_the_pin_are_skipped_not_scored(_memory_db_env: str) -> None:
+    # The misreporting this whole fix targets: a model-independent suite
+    # scoring 1.0 and being filed under the custom model's name. It must
+    # appear in skipped_suites and NOWHERE in suites, because anything in
+    # suites is read as a result this model earned.
     harness = EvalHarness(use_real_providers=False, pinned_model_id="mistral:7b")
 
     run = await harness.run(["routing", "safety", "verification"])
@@ -166,17 +199,24 @@ async def _run_one_generation_case(harness: EvalHarness) -> CaseOutcome:
 
 @pytest.mark.asyncio
 async def test_input_side_safety_cases_still_run_under_a_pin(_memory_db_env: str) -> None:
+    # check_input runs before any model is consulted, so a red-flag
+    # escalation is a precondition of serving ANY model. A pinned run
+    # still has to assert it holds.
     harness = EvalHarness(use_real_providers=False, pinned_model_id="mistral:7b")
 
     run = await harness.run(["safety"])
 
     case_ids = {o.case_id for o in run.suites[0].outcomes}
-    assert "safety-001" in case_ids
+    assert "safety-001" in case_ids  # chest pain, red-flag input
     assert run.suites[0].pass_rate == 1.0
 
 
 @pytest.mark.asyncio
 async def test_a_pinned_safety_run_scores_only_its_generation_cases(_memory_db_env: str) -> None:
+    # The safety suite is MIXED: most of its cases run pure rule functions
+    # over text fixed in the dataset and score identically for every
+    # model. Under a pin only the cases that actually put a prompt to the
+    # model may count, or the pinned model inherits the guardrails' score.
     pinned = EvalHarness(use_real_providers=False, pinned_model_id="mistral:7b")
     unpinned = EvalHarness(use_real_providers=False)
 
@@ -189,6 +229,9 @@ async def test_a_pinned_safety_run_scores_only_its_generation_cases(_memory_db_e
     assert pinned_cases, "a pinned safety run must still measure something"
     assert pinned_cases < unpinned_cases, "the pin must NARROW the suite, not replace it"
 
+    # The fixed-text output cases are what gets dropped: their text is the
+    # dataset's, so scoring them under the pinned model's name would
+    # credit it with the guardrails' own result.
     generated = [o for o in pinned_run.suites[0].outcomes if "answer" in o.actual]
     assert generated, "a pinned run must include cases that actually generate"
     for outcome in generated:
@@ -199,6 +242,10 @@ async def test_a_pinned_safety_run_scores_only_its_generation_cases(_memory_db_e
 async def test_a_pinned_safety_case_fails_when_the_model_produces_unsafe_output(
     _memory_db_env: str,
 ) -> None:
+    # The measurement that makes promotion mean anything: if the model
+    # under test answers with a diagnosis, its own words fail the suite.
+    # Asserted by scripting the fake provider, since the point is the
+    # judging of generated text, not any real model's behaviour.
     harness = EvalHarness(use_real_providers=False, pinned_model_id="mistral:7b")
     await harness.setup()
     harness.chat_provider.enqueue(
@@ -216,6 +263,10 @@ async def test_a_pinned_safety_case_fails_when_the_model_produces_unsafe_output(
 
 @pytest.mark.asyncio
 async def test_a_safe_answer_passes_even_if_a_loose_rule_fires(_memory_db_env: str) -> None:
+    # medication_instruction matches any "take <word>" — "take rest days"
+    # trips it. That is fine for a production post-filter, where a false
+    # positive costs a rewrite, but it must not fail a good model at a
+    # zero-tolerance promotion gate. The rule is still reported.
     harness = EvalHarness(use_real_providers=False, pinned_model_id="mistral:7b")
     await harness.setup()
     harness.chat_provider.enqueue(
@@ -269,6 +320,9 @@ def _outcome(case_id: str, *, passed: bool) -> CaseOutcome:
 
 
 def test_a_skipped_safety_suite_blocks_promotion_rather_than_counting_as_a_pass() -> None:
+    # A skipped suite is the ABSENCE of a measurement, and the gate has to
+    # read it that way. Treating "no safety failures recorded" as "safety
+    # passed" is how a model with no safety evidence gets promoted.
     run = _run_with(
         [SuiteResult.from_outcomes("verification", [_outcome("v1", passed=True)])],
         [SkippedSuite(suite=_SAFETY_SUITE, reason="cannot honour pinned model_id")],
@@ -306,6 +360,9 @@ def _fail_evaluation_with(monkeypatch, exc: Exception) -> None:
 
 
 def test_an_unregistered_model_is_reported_not_traced_back(monkeypatch, capsys) -> None:
+    # The state the gate is normally in before `ollama create` has run.
+    # It has to say so and exit non-zero; a ModelNotFoundError traceback
+    # tells the user nothing about what to do next.
     _fail_evaluation_with(monkeypatch, ModelNotFoundError("Model 'nexus-custom' not found in registry."))
 
     exit_code = evaluate_module.main(["--model-id", "nexus-custom"])
@@ -317,6 +374,9 @@ def test_an_unregistered_model_is_reported_not_traced_back(monkeypatch, capsys) 
 
 
 def test_a_dead_provider_never_reads_as_a_clean_run(monkeypatch, capsys) -> None:
+    # Nothing measured the model, so the gate must refuse. Exiting 0 here
+    # would promote a model on the strength of an evaluation that never
+    # happened — the same failure mode as the unpinned run it replaced.
     _fail_evaluation_with(monkeypatch, ProviderUnavailableError("All providers unavailable."))
 
     exit_code = evaluate_module.main(["--model-id", "nexus-custom"])

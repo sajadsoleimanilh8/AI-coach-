@@ -3,6 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+# Roughly 4 characters per token holds well enough across English prose and
+# code for a pre-flight length check. The real tokenizer is base-model
+# specific and lives in the ML stack, which is deliberately not installed
+# on the machine running validation — and tiktoken would fetch its encoding
+# over the network on first use, which a local validation pass must not do.
 _CHARS_PER_TOKEN = 4
 
 _DEFAULT_IMBALANCE_THRESHOLD = 0.6
@@ -30,7 +35,12 @@ def validate_dataset(
     max_seq_length: int,
     imbalance_threshold: float = _DEFAULT_IMBALANCE_THRESHOLD,
 ) -> list[str]:
-    """Returns problems (empty list = clean)."""
+    """Returns problems (empty list = clean).
+
+    The token-length check matters more than usual here: at 12GB every
+    over-long example is a potential OOM at some unpredictable step,
+    thousands of steps into a run that has already burned hours.
+    """
     dataset_path = Path(path)
     if not dataset_path.exists():
         return [f"dataset not found: {dataset_path}"]

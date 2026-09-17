@@ -1,4 +1,8 @@
-"""Match-scoped, transparent what-if simulation API."""
+"""Match-scoped, transparent what-if simulation API.
+
+This is deterministic recomputation over persisted tracking data, not
+reinforcement learning and not an outcome predictor.
+"""
 from __future__ import annotations
 
 from collections import Counter, defaultdict
@@ -64,6 +68,8 @@ def run_simulation(match_id: str, payload: SimulationRequest, db: Session = Depe
         if isinstance(raw_assignment, (int, float)):
             assignment_confidences.append(float(raw_assignment))
 
+    # Older runs did not persist this upstream confidence. Zero deliberately
+    # activates the scorers' low-upstream-confidence gates instead of guessing.
     assignment_confidence = (
         min(assignment_confidences) if assignment_confidences else 0.0
     )

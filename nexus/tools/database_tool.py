@@ -36,7 +36,7 @@ class DatabaseTool(Tool):
     async def execute(self, arguments: dict[str, Any]) -> ToolResult:
         query = (arguments.get("query") or "").strip()
         if query.endswith(";"):
-            query = query[:-1].strip()
+            query = query[:-1].strip()  # tolerate one harmless trailing semicolon
         if not query:
             return ToolResult(success=False, output="", error="Missing required argument: query")
         if not _SELECT_RE.match(query):

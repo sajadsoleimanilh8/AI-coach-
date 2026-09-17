@@ -21,6 +21,12 @@ class ToolCallSummaryData:
     """Plain-dataclass mirror of api.schemas.ToolCallSummary — core/ must
     not depend on api/, so the pydantic conversion happens at the API
     boundary (chat.py, agents.py), not here.
+
+    `thought` and `timestamp` are extra fields AgentRuntime needs to build
+    its AgentStep trace (principle 6: explainability) that ToolCallSummary
+    deliberately does NOT expose over the /api/chat wire format — chat.py's
+    mapping only reads name/arguments/result_summary, so adding fields here
+    is invisible to existing chat.py behavior/tests.
     """
 
     name: str
@@ -53,6 +59,14 @@ async def run_tool_loop(
     AgentRuntime. Call the model with tool schemas attached -> if it returns
     tool calls, execute each via tool_registry and feed results back as
     role="tool" messages -> repeat until a plain answer or max_iterations.
+
+    `allowed_tools=None` exposes every registered tool (today's chat.py
+    behavior, unchanged). A given list restricts both what the model is
+    shown (schemas are pre-filtered, so a permitted-only model can't even
+    "discover" a disallowed tool) and what actually executes: a tool_call
+    for a name outside the allowlist is refused with a role="tool" message
+    explaining why, never silently run — an agent's declared permissions
+    must hold even if the underlying model tries to call something else.
     """
     all_schemas = tool_registry.enabled_tool_schemas()
     if allowed_tools is None:
@@ -86,6 +100,10 @@ async def run_tool_loop(
             hit_iteration_cap = False
             break
 
+        # Every tool_call returned alongside this same generate() response
+        # shares this iteration's assistant text as its "thought" — that
+        # text is the model's stated reasoning for the whole batch of calls,
+        # not any single one of them.
         iteration_thought = result.content or ""
 
         for call in result.tool_calls:
@@ -123,7 +141,7 @@ async def run_tool_loop(
                 )
             )
 
-    assert result is not None
+    assert result is not None  # max_iterations >= 1 always, so the loop runs at least once
     combined_usage = Usage(
         prompt_tokens=total_prompt_tokens, completion_tokens=total_completion_tokens
     )

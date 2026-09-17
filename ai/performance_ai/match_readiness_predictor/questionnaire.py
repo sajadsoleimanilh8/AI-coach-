@@ -1,5 +1,15 @@
 """
 The validated pre-match self-report -- the single input to this engine.
+
+Pure Python: a dataclass plus explicit range validation, no Pydantic, no
+FastAPI, no DB. That keeps the engine usable (and unit-testable) on its own,
+exactly like every other module under ai/, while the API layer gets its 422s
+from Pydantic constraints built on the SAME bounds imported from
+constants.py -- so the two rejection rules cannot drift.
+
+Out-of-range values raise QuestionnaireValidationError. Nothing is clamped:
+silently rounding an impossible 30-hour sleep down to 24 would turn a data-
+entry mistake into a real-looking reading.
 """
 
 from __future__ import annotations
@@ -39,34 +49,68 @@ def _require_non_negative(name: str, value: float) -> None:
 
 @dataclass(frozen=True)
 class PreMatchQuestionnaireInput:
-    """One player's self-report for one upcoming match."""
+    """One player's self-report for one upcoming match.
 
+    Frozen so nothing downstream can mutate the answers after validation --
+    the assessment stored against these answers has to stay explainable by
+    them.
+
+    Grouped exactly as the product spec groups them: sleep, physical
+    activity, recovery, hydration & nutrition, plus identifiers.
+    """
+
+    # --- identifiers -------------------------------------------------------
+    # A plain external identifier supplied by the caller/frontend. NOT the
+    # integer ByteTrack tracking ID used by PlayerDetection/PlayerTracking/
+    # Event/PlayerMetric: those are scoped to a single processed video and
+    # carry no cross-match identity (see the module comment in
+    # backend/api/player_intelligence.py refusing to resolve them to real
+    # players). A pre-match questionnaire is filled in before any tracking
+    # exists, so there is no tracking ID to reuse and nothing to resolve
+    # against.
     player_id: str
 
+    # Only set when a Match row already exists for the upcoming game (Match
+    # rows are created at video-upload time). A genuine pre-match submission
+    # legitimately has none yet.
     match_id: str | None = None
 
-    sleep_duration_hours: float = 8.0
-    sleep_quality: int = 5
+    # --- sleep -------------------------------------------------------------
+    sleep_duration_hours: float = 8.0   # (0, 24]
+    sleep_quality: int = 5              # 1-10
     bedtime: time | None = None
     wake_time: time | None = None
-    night_awakenings: int = 0
+    night_awakenings: int = 0           # >= 0
 
+    # --- physical activity -------------------------------------------------
     trained_last_24h: bool = False
     trained_last_48h: bool = False
-    training_duration_minutes: float = 0.0
-    training_intensity: int = 1
-    high_intensity_activity: bool = False
-    hours_since_last_training: float | None = None
+    training_duration_minutes: float = 0.0  # >= 0
+    training_intensity: int = 1             # 1-10
+    high_intensity_activity: bool = False   # sprint / high-intensity work
+    hours_since_last_training: float | None = None  # >= 0, None if not recent
 
-    fatigue: int = 5
-    muscle_soreness: int = 5
-    pain_level: int = 1
-    perceived_readiness: int = 5
+    # --- recovery ----------------------------------------------------------
+    fatigue: int = 5             # 1-10, higher = more fatigued
+    muscle_soreness: int = 5     # 1-10, higher = more sore
+    pain_level: int = 1          # 1-10, higher = more self-reported pain
+    perceived_readiness: int = 5  # 1-10, higher = feels more ready
 
-    hydration_liters: float = 0.0
-    nutrition_quality: int = 5
-    hours_since_last_meal: float = 0.0
+    # --- hydration & nutrition ---------------------------------------------
+    # Litres, not a 1-10 self-rating. Chosen deliberately: this questionnaire
+    # already leans heavily on subjective 1-10 scales (fatigue, soreness,
+    # pain, perceived readiness, sleep quality, nutrition quality), and
+    # hydration is the one dimension here a player can actually quantify
+    # rather than estimate. Scoring it against a stated litre target also
+    # makes hydration_score auditable ("2.1L against a 3.0L target") in a way
+    # "hydration: 7/10" is not.
+    hydration_liters: float = 0.0   # >= 0
+    nutrition_quality: int = 5      # 1-10
+    hours_since_last_meal: float = 0.0  # >= 0
 
+    # Free text. Informational ONLY -- never reaches the scoring layer (see
+    # features.py). Surfaced verbatim on the API response so a coach can read
+    # it, but it must not move any number.
     caffeine_or_supplement_notes: str | None = field(default=None)
 
     def __post_init__(self) -> None:

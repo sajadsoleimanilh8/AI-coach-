@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from nexus.agents.base import Agent, AgentContext
 from nexus.core.types import TaskType
@@ -21,6 +22,10 @@ _SUMMARY_CHAR_LIMIT = 600
 class DelegationGuard:
     """Hard caps on delegation, enforced in the runtime rather than asked
     for in a prompt (principle 6).
+
+    A prompt-level instruction ("do not delegate more than six times") is a
+    request a model can decline; this is a wall it cannot get past. State is
+    per-run, so one goal's budget never leaks into the next.
     """
 
     max_depth: int = _DEFAULT_MAX_DEPTH
@@ -72,6 +77,10 @@ class DelegateTool(Tool):
     ToolRegistry so delegation flows through the same permission checks,
     tool-call loop, and step tracing as every other tool — there is no
     parallel control path for multi-agent work.
+
+    Constructed per run (it carries that run's guard and depth), which is
+    why AgentRuntime builds an augmented registry rather than registering
+    this at startup.
     """
 
     name = DELEGATE_TOOL_NAME

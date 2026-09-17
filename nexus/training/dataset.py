@@ -4,10 +4,11 @@ import argparse
 import json
 import sys
 import time
+from collections.abc import Iterable, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
@@ -25,17 +26,25 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 ALL_SOURCES: tuple[str, ...] = ("high_feedback", "verified_high", "eval_failure", "synthetic")
 
+# Below this many records, a ProcessPoolExecutor costs more than it saves:
+# Windows spawns workers rather than forking, so every worker pays a fresh
+# interpreter start plus a re-import of nexus.intelligence before it
+# classifies its first string. 24 cores only start paying off once there
+# is real work to hand them.
 _PARALLEL_CLASSIFY_THRESHOLD = 400
 
 _P95 = 0.95
 
+# Set once per pool worker by _init_classifier_worker — a PrivacyClassifier
+# compiles its full pattern set on construction, which should happen once
+# per process, not once per record.
 _WORKER_CLASSIFIER: PrivacyClassifier | None = None
 
 
 @dataclass
 class TrainingExample:
     messages: list[dict[str, str]]
-    source: str
+    source: str  # high_feedback|eval_failure|verified_high|synthetic
     task_type: str
     weight: float = 1.0
 
@@ -194,6 +203,9 @@ class DatasetBuilder:
                 messages=self._messages_from_interaction(record),
                 source="high_feedback",
                 task_type=record.task_type,
+                # A human explicitly endorsed this answer, which is the
+                # strongest signal available here — weighted above the
+                # automated sources deliberately.
                 weight=1.5,
             )
             for record in records
@@ -214,6 +226,8 @@ class DatasetBuilder:
             if record.verification_band == "high"
             and record.verification_score is not None
             and record.verification_score >= min_verification_score
+            # A record already mined as high_feedback should not be counted
+            # twice with a second weight.
             and record.user_feedback != 1
         ]
 
@@ -242,6 +256,9 @@ class DatasetBuilder:
                         ],
                         source="eval_failure",
                         task_type=suite.suite,
+                        # These are exactly the cases the model got wrong,
+                        # so they carry more signal per example than a
+                        # record of it already succeeding.
                         weight=2.0,
                     )
                 )
@@ -275,7 +292,9 @@ class DatasetBuilder:
         InteractionRecord.privacy_level. The stored label was written by
         whatever classifier version was live at request time; if the
         pattern set has tightened since (or an example came from a source
-        """
+        that never had a label at all, like a template), the stored value
+        is stale and trusting it would export exactly the records the
+        current rules say must stay on this machine."""
         if not excluded:
             return list(examples), 0
 
@@ -319,7 +338,7 @@ class DatasetBuilder:
         )
 
 
-def _parse_args(argv: list[str] | None = None) -> "argparse.Namespace":
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build a NEXUS training dataset.")
     parser.add_argument("--output", type=str, default="nexus/training/data/dataset.jsonl")
     parser.add_argument(
@@ -338,7 +357,7 @@ def _parse_args(argv: list[str] | None = None) -> "argparse.Namespace":
     return parser.parse_args(argv)
 
 
-async def _main_async(args: "argparse.Namespace") -> int:
+async def _main_async(args: argparse.Namespace) -> int:
     from nexus.config.settings import get_settings
     from nexus.memory.storage import create_async_db_engine
 

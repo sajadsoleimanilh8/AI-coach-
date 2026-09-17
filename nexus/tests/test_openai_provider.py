@@ -193,7 +193,7 @@ async def test_generate_with_tools_sends_canonical_schema_translated_to_openai_f
         tools=canonical_tools,
     )
 
-    assert result.content == ""
+    assert result.content == ""  # null content when the model only returns tool_calls
     assert result.tool_calls is not None
     [call] = result.tool_calls
     assert call.id == "call_abc"

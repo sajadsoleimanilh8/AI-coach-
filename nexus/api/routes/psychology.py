@@ -1,5 +1,14 @@
 """
 LLM Coach route for pre-match mental readiness.
+
+Registered alongside the other sports routes in nexus/api/main.py. Kept in its
+own module rather than appended to routes/sports.py because it reads a
+different endpoint family on the football backend, with its own response
+contract -- the same reason nexus/sports/psychology_adapter.py is a separate
+client from HttpSportsDataAdapter.
+
+Every number in the response is computed by the football backend's
+deterministic engine; the LLM writes only `narrative`.
 """
 
 from __future__ import annotations
@@ -7,6 +16,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 
 from nexus.api.schemas import PsychologyCoachReportResponse
+from nexus.api.services import get_services
 from nexus.core.exceptions import ProviderUnavailableError
 from nexus.sports.coach import CoachAssistant, PsychologyCoachReport
 
@@ -18,6 +28,8 @@ def _to_response(report: PsychologyCoachReport) -> PsychologyCoachReportResponse
     return PsychologyCoachReportResponse(
         player_id=report.player_id,
         match_id=report.match_id,
+        # Copied verbatim from the assessment -- nothing on this path
+        # recomputes, rounds, or rescales a value.
         mental_readiness=assessment.mental_readiness,
         focus=assessment.focus,
         confidence=assessment.confidence,
@@ -45,8 +57,20 @@ def _to_response(report: PsychologyCoachReport) -> PsychologyCoachReportResponse
 async def get_psychology_report(
     player_id: str, request: Request, match_id: str | None = None
 ) -> PsychologyCoachReportResponse:
-    """Narrates the player's latest mental-readiness assessment."""
-    coach: CoachAssistant = request.app.state.coach_assistant
+    """Narrates the player's latest mental-readiness assessment.
+
+    player_id is a string, like the pre-match health route and unlike the
+    integer player_id on /sports/{match_id}/player/{player_id}. That is not an
+    inconsistency: the tactical route's id is a ByteTrack tracking ID scoped to
+    one processed video, while a questionnaire is submitted before any tracking
+    exists and carries the caller's own external identifier. Two different ID
+    spaces, deliberately not conflated.
+
+    404 when the player has not submitted a questionnaire -- distinct from the
+    503 a backend outage produces, so a caller can tell "nothing to report yet"
+    from "we could not find out".
+    """
+    coach: CoachAssistant = get_services(request).coach_assistant
     try:
         report = await coach.build_psychology_report(player_id, match_id)
     except ProviderUnavailableError as exc:

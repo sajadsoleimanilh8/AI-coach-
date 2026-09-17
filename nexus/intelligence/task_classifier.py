@@ -8,11 +8,17 @@ from nexus.logging_setup.logger import get_logger
 
 logger = get_logger("intelligence.task_classifier")
 
+# Same rough heuristic OllamaRuntime and the cloud providers already use
+# for context-window checks — kept here too so the classifier stays a pure,
+# synchronous, dependency-free function (no tokenizer, no provider call).
 _CHARS_PER_TOKEN_ESTIMATE = 4
 
 _DEFAULT_MIN_CONFIDENCE = 0.3
 _DEFAULT_LONG_CONTEXT_TOKEN_THRESHOLD = 6000
 
+# confidence = min(1.0, 0.3 + 0.15 * matched_count): one matched signal is
+# "plausible" (0.45), four or more is "confident" (1.0) — simple, monotonic,
+# and easy to reason about when tuning min_confidence in nexus.yaml.
 _CONFIDENCE_BASE = 0.3
 _CONFIDENCE_PER_SIGNAL = 0.15
 
@@ -21,7 +27,15 @@ _COMPLEX_REASONING_MIN_WORDS = 40
 
 
 def _default_signal_map() -> dict[TaskType, list[str]]:
-    """Built-in keyword/regex signals per TaskType."""
+    """Built-in keyword/regex signals per TaskType.
+
+    Every entry is compiled as a case-insensitive regex (re.search), so
+    plain words work as substrings and operators can supply real regexes
+    via nexus.yaml's routing.classification.extra_signals without any code
+    change. LONG_CONTEXT and GENERAL are intentionally absent: LONG_CONTEXT
+    is a structural (token-count) override, not a topical one, and GENERAL
+    is the no-signal fallback.
+    """
     return {
         TaskType.CODING: [
             r"\bfunction\b",
@@ -182,7 +196,13 @@ class TaskClassification:
 
 
 class TaskClassifier:
-    """Deterministic keyword/pattern-based classifier."""
+    """Deterministic keyword/pattern-based classifier.
+
+    Scores every TaskType by counting matched signals against the query
+    text, picks the highest-scoring type above `min_confidence`, and falls
+    back to TaskType.GENERAL (with a low confidence reflecting "no strong
+    signal") when nothing clears the threshold.
+    """
 
     def __init__(
         self,
@@ -200,6 +220,9 @@ class TaskClassifier:
         self._long_context_token_threshold = long_context_token_threshold
 
     def classify(self, query: str, *, extra_char_count: int = 0) -> TaskClassification:
+        # Structural override checked first and unconditionally: an
+        # oversized prompt needs long-context routing regardless of what
+        # it's topically about, so it must win over any keyword match.
         estimated_tokens = (len(query) + max(extra_char_count, 0)) // _CHARS_PER_TOKEN_ESTIMATE
         if estimated_tokens > self._long_context_token_threshold:
             return TaskClassification(

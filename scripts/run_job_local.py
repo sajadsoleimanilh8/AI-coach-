@@ -1,5 +1,29 @@
 """
 Run a queued/failed processing job in THIS process, with no Celery broker.
+
+    venv/Scripts/python -m scripts.run_job_local <job_id>
+    venv/Scripts/python -m scripts.run_job_local --latest
+
+Why this exists
+---------------
+POST /api/videos/upload saves the file and creates the Match/Video/
+ProcessingJob rows, then hands off to Celery. When Redis is unreachable the
+hand-off is the only part that fails, and backend/api/main.py deliberately
+marks the job failed ("Processing queue unavailable") rather than leaving it
+queued forever with nothing to pick it up.
+
+The pipeline itself has no dependency on Celery — backend/tasks.py delegates
+to backend/pipeline/runner.py::run_pipeline() precisely so it can run
+outside a worker. Task.apply() executes the task body locally, in-process,
+without touching a broker.
+
+This runs the SAME code a worker would run and writes the SAME rows
+(PlayerMetric / TeamMetric / Event / AnalysisResult / the measured
+PipelineLatencyReport). It is not a simulation of processing, and it does
+not modify any pipeline, model, or schema code — it only calls it.
+
+Progress lands in the ProcessingJob row as it goes, so the dashboard's
+poller (GET /api/processing/{job_id}) tracks it live in the browser.
 """
 
 from __future__ import annotations
@@ -58,11 +82,16 @@ def main() -> int:
     print("take minutes, not seconds. Progress updates land in the DB as it goes.\n")
 
     started = time.time()
+    # .apply() runs the task body synchronously in this process. Not .delay(),
+    # which is the call that needs a broker and is exactly what failed at
+    # upload time.
     result = process_video_job.apply(args=[job_id])
     elapsed = time.time() - started
 
     print(f"\nFinished in {elapsed:.1f}s")
     if result.failed():
+        # A traceback here is the pipeline genuinely erroring, which is
+        # different from "the queue was unavailable" and worth showing in full.
         print("  the task raised:")
         print(f"  {result.traceback}")
     else:

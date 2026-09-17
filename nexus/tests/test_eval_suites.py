@@ -103,7 +103,7 @@ async def test_tools_evaluator_good_and_bad_cases(harness: EvalHarness) -> None:
             "goal": "Compute something", "forced_tool_name": "python",
             "forced_tool_arguments": {"code": "print(1)"}, "allowed_tools": ["files"],
         },
-        expected={"tool_name": "python", "executed": True},
+        expected={"tool_name": "python", "executed": True},  # wrongly expects execution despite no permission
         metadata={},
     )
 

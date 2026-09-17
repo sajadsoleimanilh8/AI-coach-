@@ -1,5 +1,18 @@
 """
 GET /api/matches/{match_id}/events.
+
+WHY THESE EXIST. The pipeline has written Event rows -- passes, shots,
+turnovers, first touches -- since Phase 3, and there was no endpoint anywhere
+that read them back. `events` was a table the product could not see: the
+pass/shot/turnover heuristics ran on every job and produced output nothing
+could display. These tests pin the endpoint that closed that gap, and in
+particular pin the `space` contract, which is the part that must not drift.
+
+`space` says whether possession was resolved in pitch metres (calibration
+validated) or in image pixels (it did not, and the bounding-box-height
+fallback ran instead). Those are not interchangeable readings, and the whole
+point of reporting it is that a consumer must not be able to treat the weaker
+one as the stronger by accident.
 """
 
 from __future__ import annotations
@@ -74,6 +87,9 @@ def test_a_match_with_no_events_reports_an_honest_empty_set():
     assert body["total"] == 0
     assert body["events"] == []
     assert body["by_type"] == {}
+    # Not "pitch": no events means no possession was resolved either way, and
+    # claiming the stronger instrument on an empty set would be a free
+    # upgrade.
     assert body["space"] == "none"
 
 
@@ -126,6 +142,7 @@ def test_a_mixed_match_reports_the_weaker_instrument():
     body = client.get(f"/api/matches/{match_id}/events").json()
 
     assert body["space"] == "image"
+    # Per-event, each one still reports what it individually is.
     assert [e["space"] for e in body["events"]] == ["pitch", "image"]
 
 
@@ -138,6 +155,7 @@ def test_by_type_counts_the_whole_match_not_the_returned_page():
     body = client.get(f"/api/matches/{match_id}/events?limit=1").json()
 
     assert body["returned"] == 1
+    # A truncated list must not report its own length as the total.
     assert body["total"] == 4
     assert body["by_type"] == {"pass": 3, "shot": 1}
 
@@ -150,5 +168,6 @@ def test_the_type_filter_narrows_the_list_but_not_the_counts():
     body = client.get(f"/api/matches/{match_id}/events?event_type=shot").json()
 
     assert [e["event_type"] for e in body["events"]] == ["shot"]
+    # A caller filtering to shots still needs to know passes exist.
     assert body["by_type"] == {"pass": 1, "shot": 1}
     assert body["total"] == 2

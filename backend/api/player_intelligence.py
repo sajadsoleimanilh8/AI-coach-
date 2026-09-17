@@ -4,6 +4,7 @@ Implementation Spec §5.1.
 """
 
 from __future__ import annotations
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,12 @@ from backend.database.session import get_db
 
 router = APIRouter(prefix="/api/player_intelligence", tags=["player_intelligence"])
 
+# player_id is a ByteTrack tracking ID scoped to a single video, not a resolved
+# player identity (see docs/database_schema.md's note on
+# PlayerDetection.player_id and TrackedDetection's docstring in
+# ai/computer_vision/player_tracking/tracker.py). There is no jersey-number
+# OCR, so never map it to a real person's name: showing an unidentified tracked
+# player under a real athlete's name is confident-looking fabrication.
 
 
 @router.get("/{match_id}/{player_id}", response_model=list[PlayerMetricResponse])
@@ -78,6 +85,10 @@ def get_all_player_intelligence(match_id: str, db: Session = Depends(get_db)):
     results = [
         {
             "player_id": pid,
+            # No name resolution exists for real tracked players -- see the
+            # module-level comment above for why this must not be a
+            # celebrity name lookup. "Player #N" honestly reflects that
+            # this is a tracking ID, not a resolved identity.
             "player_name": f"Player #{pid}",
             "metrics": m_list,
         }

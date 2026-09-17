@@ -1,5 +1,20 @@
 """
 Tests for the mental-readiness integration in nexus/sports/.
+
+Three things are being protected here:
+  1. PsychologyClient preserves the football backend's own distinctions --
+     "not submitted yet" (404 -> None) must never be confused with "backend is
+     down" (connection error / 5xx -> ProviderUnavailableError).
+  2. derive_psychology_factors is pure and deterministic: same assessment in,
+     same phrases out, with no I/O and no LLM anywhere near it.
+  3. CoachAssistant.build_psychology_report narrates and never calculates. The
+     numbers on the returned report are byte-identical to what the backend
+     supplied, the LLM is handed only precomputed values and phrases, and its
+     system prompt forbids it from producing a score of its own.
+
+Uses httpx.MockTransport against the client and a fake provider/router, the
+same seams test_sports_prematch_health.py uses, so no real backend and no real
+model are needed.
 """
 
 from __future__ import annotations
@@ -76,6 +91,9 @@ def _client(**kwargs) -> PsychologyClient:
     )
 
 
+# ---------------------------------------------------------------------------
+# Client
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -95,6 +113,7 @@ async def test_get_latest_maps_the_backend_contract_verbatim() -> None:
     assert assessment.confidence_level == "normal"
     assert assessment.schema_version == "v1"
     assert assessment.data_source == "self_reported"
+    # The untouched payload is kept so nothing is lost in translation.
     assert assessment.raw == _ASSESSMENT
 
 
@@ -123,6 +142,9 @@ async def test_server_error_raises_rather_than_guessing() -> None:
         await _client(status=500).get_latest("p123")
 
 
+# ---------------------------------------------------------------------------
+# derive_psychology_factors -- pure, deterministic, no LLM
+# ---------------------------------------------------------------------------
 
 
 def _assessment(**overrides) -> PsychologyAssessment:
@@ -153,6 +175,7 @@ def test_derivation_is_deterministic() -> None:
     first = derive_psychology_factors(_assessment())
     second = derive_psychology_factors(_assessment())
     assert first == second
+    # Order is stable, not just the set.
     assert first.key_positive_factors == second.key_positive_factors
 
 
@@ -215,6 +238,9 @@ def test_prompt_context_fences_off_observed_performance_proxies() -> None:
     assert "NOT measures of a mental state" in context
 
 
+# ---------------------------------------------------------------------------
+# CoachAssistant -- narrate only
+# ---------------------------------------------------------------------------
 
 
 class _FakeProvider(AIProvider):
@@ -297,6 +323,7 @@ async def test_report_carries_the_backend_numbers_through_unchanged() -> None:
     assert report.assessment.stress == 54
     assert report.assessment.pressure_risk == "moderate"
     assert report.assessment.mental_performance_risk == "low"
+    # The narrative is the ONLY model-generated field.
     assert report.narrative == "Cleared to start; manage the pressure moments early."
     assert report.model_used == "fake-model"
 
@@ -331,12 +358,15 @@ async def test_llm_receives_only_precomputed_values_and_phrases() -> None:
 
     user_content = provider.received_messages[1].content
     assert provider.received_messages[1].role == "user"
+    # Every headline number is handed over verbatim...
     assert "82" in user_content
     assert "88" in user_content
     assert "76" in user_content
     assert "54" in user_content
+    # ...along with the derived phrases...
     assert "high focus" in user_content
     assert "elevated pre-match stress" in user_content
+    # ...and an explicit instruction not to recompute.
     assert "do not" in user_content.lower()
 
 
@@ -364,7 +394,7 @@ async def test_exactly_one_llm_call_is_made() -> None:
     provider = _FakeProvider()
     await _coach(provider).build_psychology_report("p123", "m456")
     assert provider.call_count == 1
-    assert len(provider.received_messages) == 2
+    assert len(provider.received_messages) == 2  # one system + one user
 
 
 @pytest.mark.asyncio
@@ -390,6 +420,7 @@ async def test_no_assessment_yet_returns_none_rather_than_a_blank_report() -> No
     provider = _FakeProvider()
     report = await _coach(provider, status=404).build_psychology_report("nobody")
     assert report is None
+    # No LLM call is made when there is nothing to narrate.
     assert provider.received_messages is None
 
 
@@ -417,6 +448,9 @@ async def test_assessment_match_id_wins_over_the_path_match_id() -> None:
     assert report.match_id == "m456"
 
 
+# ---------------------------------------------------------------------------
+# The HTTP route
+# ---------------------------------------------------------------------------
 
 
 class _FakeCoach:
@@ -460,7 +494,7 @@ async def test_route_is_registered_and_returns_the_contract(tmp_path) -> None:
     app, AsyncClient, ASGITransport = await _route_client(coach, tmp_path)
 
     async with app.router.lifespan_context(app):
-        app.state.coach_assistant = coach
+        app.state.services.coach_assistant = coach
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -468,6 +502,7 @@ async def test_route_is_registered_and_returns_the_contract(tmp_path) -> None:
 
     assert response.status_code == 200
     body = response.json()
+    # Every number passes through the route unchanged.
     assert body["mental_readiness"] == 82
     assert body["focus"] == 88
     assert body["confidence"] == 76
@@ -487,7 +522,7 @@ async def test_route_passes_the_match_id_query_through(tmp_path) -> None:
     app, AsyncClient, ASGITransport = await _route_client(coach, tmp_path)
 
     async with app.router.lifespan_context(app):
-        app.state.coach_assistant = coach
+        app.state.services.coach_assistant = coach
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -502,7 +537,7 @@ async def test_route_404s_when_nothing_has_been_submitted(tmp_path) -> None:
     app, AsyncClient, ASGITransport = await _route_client(coach, tmp_path)
 
     async with app.router.lifespan_context(app):
-        app.state.coach_assistant = coach
+        app.state.services.coach_assistant = coach
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -519,7 +554,7 @@ async def test_route_503s_on_a_backend_outage(tmp_path) -> None:
     app, AsyncClient, ASGITransport = await _route_client(coach, tmp_path)
 
     async with app.router.lifespan_context(app):
-        app.state.coach_assistant = coach
+        app.state.services.coach_assistant = coach
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:

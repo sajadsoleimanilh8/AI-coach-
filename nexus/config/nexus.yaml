@@ -58,7 +58,11 @@ rag:
     max_nodes: 20
 
 tools:
-  enabled: [web_search, python, files, database]
+  # `python` is deliberately NOT enabled here. PythonExecutionTool runs
+  # model-supplied source with no sandbox; see nexus/tools/python_exec.py.
+  # Set NEXUS_ENABLE_PYTHON_TOOL=1 to opt in, and only behind a container
+  # boundary you are willing to lose.
+  enabled: [web_search, files, database]
   max_iterations: 3
   python_timeout_seconds: 10
   files_allowed_root: nexus/data/workspace

@@ -1,20 +1,52 @@
 """
 Metre-level validation of AUTOMATIC calibration end to end.
+
+WHAT QUESTION THIS ANSWERS
+    The calibration model's published metrics are mAP50 0.9950 / pose
+    mAP50-95 0.4319. Neither says what actually matters downstream: *if we
+    calibrate from this model's keypoints, how many metres wrong is a
+    player's pitch position?* mAP measures whether keypoints land near
+    their targets in PIXELS on the detected instance; a homography turns
+    small pixel errors on badly-chosen landmarks into large metre errors,
+    and vice versa. This script measures the metres.
+
+METHOD
+    For each labelled image:
+      1. Run the calibration model, keep keypoints above the visibility
+         floor, fit a homography through the existing compute_homography().
+      2. Take the GROUND-TRUTH keypoints (flag=2 only) as independent
+         check points. Their true pitch coordinates are known from
+         PITCH_KEYPOINTS_32.
+      3. Project each GT pixel through the MODEL's homography and measure
+         the distance, in metres, to where that landmark really is.
+
+    Step 3 is the honest test. Reporting the fit's own reprojection error
+    would only say the model's keypoints agree with each other -- and they
+    can agree perfectly while describing the wrong end of the pitch, which
+    is precisely the failure this script was written to catch.
+
+RESULT ON THIS CHECKPOINT (2026-08-13, in-domain test split)
+    See docs/pipeline_architecture.md. Summary: the model frequently fits
+    a self-consistent homography to a MIRRORED reading of the pitch --
+    sub-metre internal agreement, tens of metres wrong against ground
+    truth. HOMOGRAPHY_CONFIDENCE_MIN catches most but not all of these,
+    which is why the field-region cross-check exists and why
+    manual_calibration.py is retained.
+
+Usage:
+    python -m scripts.validate_auto_calibration --split test
 """
 
 from __future__ import annotations
 
 import argparse
 import statistics
-import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from ai.computer_vision.tactical_analysis.auto_calibration import AutoCalibrator  # noqa: E402
 from ai.computer_vision.tactical_analysis.homography import pixels_to_pitch  # noqa: E402
@@ -73,6 +105,7 @@ def main() -> int:
                 rows.append((img_path.stem, None, None, None, res.reason))
                 continue
 
+            # Project GROUND-TRUTH pixels through the MODEL's homography.
             gt_idx = sorted(gt)
             gt_px = np.array([gt[i] for i in gt_idx])
             true_m = np.array([PITCH_KEYPOINTS_32[i] for i in gt_idx])

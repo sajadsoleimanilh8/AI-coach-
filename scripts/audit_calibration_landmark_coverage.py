@@ -1,31 +1,60 @@
-"""Why are some pitch landmarks rare, and what collection would fix it?"""
+"""Why are some pitch landmarks rare, and what collection would fix it?
+
+The coverage audit established that landmark visibility is very uneven
+(indices 13-15 in ~285-290 of 317 images, index 29 in 11).  A raw histogram
+does not say what to COLLECT, because it does not distinguish two very
+different causes:
+
+  (a) the landmark is off-camera in almost every framing the broadcast
+      camera physically produces -- collecting more of the same framings
+      cannot fix it, and
+  (b) the landmark is visible only from framings that happen to be
+      under-collected -- more of THOSE framings fixes it directly.
+
+This script separates the two by joining each landmark index to its pitch
+coordinate (ai/computer_vision/tactical_analysis/pitch_keypoints.py, the
+same table homography uses) and asking, per image, which pitch REGION the
+framing actually covers.  It then reports each rare landmark's hit rate
+*conditioned on its own region being in frame*, which is the discriminating
+measurement.
+
+Reads labels only.  Writes a report; changes no dataset and no model.
+"""
 from __future__ import annotations
 
 import argparse
 import json
 import re
-import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-from configs import registry as R  # noqa: E402
 from ai.computer_vision.tactical_analysis.pitch_keypoints import (  # noqa: E402
-    PITCH_KEYPOINTS_32, PITCH_KEYPOINT_NAMES, FLIP_IDX, L, W,
+    FLIP_IDX,
+    PITCH_KEYPOINT_NAMES,
+    PITCH_KEYPOINTS_32,
+    L,
+    W,
 )
+from configs import registry as R  # noqa: E402
 
 RARE_THRESHOLD = 30
 
+# Must stay in step with CLIP_PATTERNS["calibration"] in
+# scripts/build_zero_leakage_splits.py -- both read the same export naming.
 CLIP_PATTERN = r"^([0-9a-fA-F]+)_"
 
+# Bucket membership tests, expressed against measurable label content so the
+# same predicate can score an existing image and an incoming collected one.
 MIRROR_STRESS_MIN_SYMMETRY = 0.75
 END_ASYMMETRIC_MAX_SYMMETRY = 0.35
 
+# Region membership straight from the coordinate table, so these cannot
+# drift from what homography actually consumes.
 LEFT_END = {i for i, (x, _) in PITCH_KEYPOINTS_32.items() if x < L / 3}
 RIGHT_END = {i for i, (x, _) in PITCH_KEYPOINTS_32.items() if x > 2 * L / 3}
 CENTRE = set(PITCH_KEYPOINTS_32) - LEFT_END - RIGHT_END
+# "Near" = the touchline the camera sits on (y -> W); "far" = y -> 0.
 NEAR_SIDE = {i for i, (_, y) in PITCH_KEYPOINTS_32.items() if y > W * 2 / 3}
 FAR_SIDE = {i for i, (_, y) in PITCH_KEYPOINTS_32.items() if y < W / 3}
 
@@ -74,6 +103,10 @@ def build(out_dir: Path) -> dict:
 
     rare = sorted(i for i in range(32) if counts.get(i, 0) < RARE_THRESHOLD)
 
+    # The discriminating measurement: for each landmark, how often is it
+    # visible GIVEN that its own end is already in frame? A low conditional
+    # rate means (a) framing/camera geometry; a high conditional rate with a
+    # small denominator means (b) that end is simply under-collected.
     conditional = {}
     for i in range(32):
         region = LEFT_END if i in LEFT_END else (RIGHT_END if i in RIGHT_END else CENTRE)
@@ -94,6 +127,9 @@ def build(out_dir: Path) -> dict:
 
     framings = Counter(_framing(r["visible"]) for r in recs)
 
+    # Near/far asymmetry at matched pitch positions. These pairs share an
+    # x-coordinate and differ only in which touchline they sit on, so a gap
+    # between them isolates the camera-side effect from the end effect.
     matched_pairs = [(0, 5), (24, 29), (13, 16)]
     side_gap = [{
         "far_index": f, "far_name": PITCH_KEYPOINT_NAMES[f], "far_visible_in": counts.get(f, 0),
@@ -110,6 +146,8 @@ def build(out_dir: Path) -> dict:
         "far_side_any": sum(1 for r in recs if r["visible"] & FAR_SIDE),
     }
 
+    # Co-occurrence for the rarest landmark: what ELSE is in frame when it
+    # appears? This describes the framing that would have to be collected.
     cooccur = {}
     for i in rare:
         with_i = [r for r in recs if i in r["visible"]]
@@ -123,6 +161,11 @@ def build(out_dir: Path) -> dict:
                                      if with_i else None),
         }
 
+    # Mirror ambiguity. A homography fit is free to land on the flipped pitch
+    # when the VISIBLE landmark set is (near-)invariant under FLIP_IDX: the
+    # mirrored hypothesis then explains the same points about as well. This
+    # is the measurement that speaks to the observed mirrored-end failure,
+    # as opposed to end coverage, which is already balanced.
     def flip(s: set[int]) -> set[int]:
         return {FLIP_IDX[i] for i in s}
 
@@ -150,6 +193,11 @@ def build(out_dir: Path) -> dict:
     for s in sym_rows:
         sym_by_framing[s["framing"]].append(s["symmetry"])
 
+    # Per-clip bucket coverage. The image-count deficit says how many frames
+    # to collect; this says how many INDEPENDENT SCENES currently supply each
+    # bucket. A bucket fed by one or two clips is not covered, however many
+    # frames it holds -- that is the same effective-diversity trap the 18-clip
+    # finding exposed, one level down.
     def _sym(v: set[int]) -> float:
         return len(v & {FLIP_IDX[i] for i in v}) / len(v) if v else 0.0
 

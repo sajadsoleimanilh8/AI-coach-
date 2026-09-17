@@ -9,15 +9,24 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "node tests/navigation.spec.mjs && node tests/match-selection.spec.mjs && node tests/match-analysis.spec.mjs && node tests/coach-report.spec.mjs",
-    "test:coach": "node tests/coach-report.spec.mjs"
+    "test:coach": "node tests/coach-report.spec.mjs",
+    "lint": "eslint .",
+    "format": "prettier --write \"src/**/*.{js,jsx,css}\"",
+    "format:check": "prettier --check \"src/**/*.{js,jsx,css}\""
   },
   "dependencies": {
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@vitejs/plugin-react": "^4.3.4",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.12.0",
     "playwright": "^1.62.1",
+    "prettier": "^3.9.7",
     "vite": "^6.0.7"
   }
 }

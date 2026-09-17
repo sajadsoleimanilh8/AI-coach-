@@ -12,6 +12,15 @@ from backend.pipeline.runner import PipelineAssetError, run_pipeline
 def process_video_job(self, job_id: str):
     """
     Async entry point for the video processing pipeline.
+
+    Delegates the actual work to backend/pipeline/runner.py::run_pipeline(),
+    which is kept independent of Celery so it can be unit-tested with synthetic
+    data.
+
+    Every stage is wrapped in a PipelineTimer (backend/pipeline/latency.py)
+    and the resulting PipelineLatencyReport is written to this job's
+    AnalysisResult, so every latency figure comes from an actual run of this
+    exact code.
     """
     db = SessionLocal()
     try:
@@ -37,6 +46,10 @@ def process_video_job(self, job_id: str):
         try:
             result = run_pipeline(db, job, timer, progress_cb=on_progress)
         except PipelineAssetError as asset_error:
+            # Distinct from an unexpected crash: a required asset (trained
+            # model, video file, calibration, Match link) was missing.
+            # The message is already specific and actionable -- surface it
+            # as-is rather than wrapping it in a generic "pipeline failed."
             job.status = ProcessingStatus.failed
             job.error = f"Missing pipeline asset: {asset_error}"
             job.message = "Processing failed -- missing required asset."
@@ -45,6 +58,11 @@ def process_video_job(self, job_id: str):
             db.commit()
             return {"job_id": job_id, "status": "failed", "error": str(asset_error)}
 
+        # Persist the real (measured, not hand-typed) latency report
+        # alongside the job's analysis result -- see
+        # backend/pipeline/latency.py's docstring and
+        # scripts/generate_latency_report.py for how this feeds
+        # docs/pipeline_latency_profile.md.
         latency_report = timer.to_report_dict()
         db.add(AnalysisResult(
             job_id=job_id,
@@ -57,6 +75,10 @@ def process_video_job(self, job_id: str):
                 "team_metrics_written": result.team_metrics_written,
                 "homography_confidence": result.homography_confidence,
                 "calibration_valid_fraction": result.calibration_valid_fraction,
+                # The annotated-render outcome, including the reason when
+                # there isn't one. Persisted so "no processed video" is
+                # answerable from the API instead of only from worker logs
+                # -- see backend/pipeline/overlay_video.py's docstring.
                 "overlay_render": result.overlay_render,
                 "pipeline_latency": latency_report,
             },
@@ -67,11 +89,19 @@ def process_video_job(self, job_id: str):
             ),
         ))
 
+        # Invalidate by match_id, not video_id: every cache key is keyed by
+        # match_id (see backend/api/cache.py), so a video_id would never hit a
+        # real key.
         invalidate_match_cache(result.match_id)
 
         job.status = ProcessingStatus.completed
         job.progress = 100
         job.message = "Analysis complete."
+        # Clear `error` on success. A job that failed once -- typically
+        # "Processing queue unavailable" written by backend/api/main.py when
+        # the broker was down at upload -- and is then re-run must not serve a
+        # completed status with a stale failure string that any consumer would
+        # read as "this run had a problem".
         job.error = None
         job.completed_at = datetime.utcnow()
         job.updated_at = datetime.utcnow()

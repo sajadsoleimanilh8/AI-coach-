@@ -1,4 +1,13 @@
-"""The GGUF export instructions users are told to run."""
+"""The GGUF export instructions users are told to run.
+
+The bug these lock in: quantize.py printed a single command ending in
+`--outtype q4_k_m`, which convert_hf_to_gguf.py rejects outright — it is a
+converter, not a quantizer. Anyone following the printed instructions hit
+an argparse error. The real path is two tools in sequence.
+
+Everything here is string assembly with no ML imports, so it runs on any
+machine — no GPU, no torch, no llama.cpp checkout.
+"""
 
 from __future__ import annotations
 
@@ -22,6 +31,8 @@ def _instructions(quantization: str = "q4_k_m") -> str:
 
 
 def test_every_printed_outtype_is_one_the_converter_accepts() -> None:
+    # The regression test proper. Whatever else the text says, no
+    # --outtype may name a value convert_hf_to_gguf.py would reject.
     emitted = _OUTTYPE_RE.findall(_instructions())
 
     assert emitted, "instructions must actually contain a --outtype to convert with"
@@ -34,6 +45,8 @@ def test_every_printed_outtype_is_one_the_converter_accepts() -> None:
 
 @pytest.mark.parametrize("quantization", ["q4_k_m", "q5_k_m", "q6_k", "q8_0"])
 def test_a_k_quant_is_never_passed_to_the_converter(quantization: str) -> None:
+    # k-quants come from llama-quantize. Requesting one must change the
+    # SECOND command, never leak into the converter's --outtype.
     text = _instructions(quantization)
 
     assert quantization not in _OUTTYPE_RE.findall(text)
@@ -49,10 +62,13 @@ def test_both_commands_are_emitted_in_the_order_they_must_be_run() -> None:
 
 
 def test_the_intermediate_file_is_named_explicitly_and_reused() -> None:
+    # Step 2's input has to be step 1's output by name — an unnamed
+    # intermediate is exactly how someone ends up feeding llama-quantize
+    # the merged directory instead of the f16 GGUF.
     text = gguf_conversion_instructions("out/merged", "out/nexus-custom-q4_k_m.gguf", "q4_k_m")
     expected_intermediate = f"nexus-custom-q4_k_m-{INTERMEDIATE_OUTTYPE}.gguf"
 
-    assert text.count(expected_intermediate) >= 2
+    assert text.count(expected_intermediate) >= 2  # written in step 1, consumed in step 2
     quantize_line = next(line for line in text.splitlines() if "llama-quantize" in line)
     assert expected_intermediate in quantize_line
     assert "nexus-custom-q4_k_m.gguf" in quantize_line
@@ -67,6 +83,8 @@ def test_the_final_target_is_the_quantized_file_not_the_intermediate() -> None:
 
     quantize_line = next(line for line in text.splitlines() if "llama-quantize" in line)
     parts = quantize_line.split()
+    # llama-quantize <in> <out> <TYPE> — the output must be the requested
+    # path, not the f16 stage.
     assert parts[-1] == "Q4_K_M"
     assert parts[-2].endswith("model-q4_k_m.gguf")
     assert parts[-3].endswith(f"model-q4_k_m-{INTERMEDIATE_OUTTYPE}.gguf")

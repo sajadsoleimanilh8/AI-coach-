@@ -25,6 +25,8 @@ _OUTPUT_BLOCKED_FALLBACK = (
     "The specific claim above could not be shared safely. " + MEDICAL_DISCLAIMER
 )
 
+# Compiled once at module scope (never per-call) — text that must
+# short-circuit the whole health path rather than be analyzed at all.
 RED_FLAG_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("chest_pain", re.compile(r"\bchest\s+pain\b", re.IGNORECASE)),
     (
@@ -86,6 +88,8 @@ RED_FLAG_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ),
 ]
 
+# Compiled once at module scope — output the health path must never ship,
+# checked on every model-generated health response.
 PROHIBITED_OUTPUT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "diagnostic_claim",

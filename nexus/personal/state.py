@@ -88,6 +88,10 @@ class PersonalStateEngine:
         history that happened before it could be recorded — importing a
         wearable's export, or seeding a known series. record_signal() is
         this with recorded_at=now.
+
+        Validation is identical either way: a backdated signal is still a
+        signal, and letting it skip the dimension/range/source checks would
+        put rows in the table that get_state() cannot interpret.
         """
         if dimension not in ALL_DIMENSIONS:
             raise InvalidSignalError(f"Unknown dimension: {dimension!r}")
@@ -128,7 +132,7 @@ class PersonalStateEngine:
         window_days — the raw material trends.compute_trend() fits a line
         to. Unlike get_state(), this intentionally does NOT stop at
         recent_window_days: a trend needs to see the trajectory leading up
-        """
+        to now, not just the "current" slice."""
         cutoff = time.time() - window_days * _SECONDS_PER_DAY
         async with self._session_factory() as db:
             result = await db.execute(

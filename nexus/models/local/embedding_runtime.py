@@ -10,7 +10,13 @@ logger = get_logger("models.local.ollama_embeddings")
 
 
 class OllamaEmbeddingProvider(EmbeddingProvider):
-    """EmbeddingProvider backed by a local Ollama instance's /api/embeddings."""
+    """EmbeddingProvider backed by a local Ollama instance's /api/embeddings.
+
+    Ollama's classic embeddings endpoint takes one prompt per request (no
+    batch input), so `embed()` issues one call per text — fine at RAG-chunk
+    batch sizes (tens, not thousands), and keeps this adapter symmetric
+    with `OllamaRuntime`'s httpx client construction pattern.
+    """
 
     def __init__(
         self,
@@ -23,7 +29,7 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
         self._base_url = base_url.rstrip("/")
         self._model_id = model_id
         self._timeout_seconds = timeout_seconds
-        self._transport = transport
+        self._transport = transport  # test seam: inject httpx.MockTransport
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(

@@ -26,6 +26,9 @@ def build_personal_context_message(
     sections: list[str] = ["User's current personal context (confidence-weighted from recorded signals):"]
 
     if state.dimensions:
+        # Most-trusted readings first — with only max_dimensions of room,
+        # a low-confidence, low-sample-count value is the one worth
+        # dropping, not the fact that it exists at all.
         ranked = sorted(
             state.dimensions.values(), key=lambda d: d.confidence, reverse=True
         )[:max_dimensions]

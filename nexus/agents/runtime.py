@@ -17,6 +17,9 @@ from nexus.verification.engine import VerificationEngine
 
 _DEFAULT_TEMPERATURE = 0.7
 
+# Versioned in one place per the project's "versioned prompts" principle —
+# every agent's behavior shares this contract regardless of its own
+# system_prompt(), so tuning it once tunes it for all agents at once.
 PLANNING_PREAMBLE = (
     "You are an autonomous agent working toward a specific goal. Break the "
     "goal into concrete steps. Use the tools available to you to gather real "
@@ -34,6 +37,12 @@ class AgentRuntime:
     with require_tool_calling=True; execution goes through the shared
     run_tool_loop() with the agent's allowed_tools — the same two
     components chat.py's tool-calling path already uses, so agents get
+    provider failover and tool-permission enforcement for free instead of
+    a second implementation (principle 1).
+
+    Delegation and multi-round research are both driven from here rather
+    than from inside an agent: the caps that bound them have to be
+    enforced by the runtime to be real (principle 6).
     """
 
     def __init__(
@@ -54,6 +63,9 @@ class AgentRuntime:
         self._max_iterations = max_iterations
         self._cost_tracker = cost_tracker
         self._verification_engine = verification_engine
+        # Injected rather than imported so nexus/agents/orchestrator.py
+        # never has to import the registry that lists it — that would be a
+        # cycle (registry -> orchestrator -> registry).
         self._agent_factory = agent_factory
         self._enabled_agents = enabled_agents or []
         self._orchestration_max_depth = orchestration_max_depth
@@ -78,6 +90,9 @@ class AgentRuntime:
             require_tool_calling=True,
         )
 
+        # Allows POST /api/agents/{name}/run's optional max_iterations to
+        # override the server default for a single run without widening
+        # AgentRuntime.run()'s signature beyond what the spec defines.
         max_iterations = context.extra.get("max_iterations") or self._max_iterations
 
         active_guard = guard or DelegationGuard(
@@ -142,6 +157,11 @@ class AgentRuntime:
             if not verdict.allowed:
                 final_answer = verdict.rewritten_text or final_answer
 
+        # Runs on the FINAL answer (after any safety rewrite above), so a
+        # verification report is never computed against text the caller
+        # won't actually see. `retrieved_evidence` is an optional
+        # convention an agent's prepare_context() can stash into
+        # context.extra (see ResearchAgent).
         verification = None
         if agent.verify_output and self._verification_engine is not None:
             verification = await self._verification_engine.verify(
@@ -231,6 +251,9 @@ class AgentRuntime:
                 rag_service=parent_context.rag_service,
                 long_term_memory=parent_context.long_term_memory,
                 personal_state=parent_context.personal_state,
+                # A shallow copy so a specialist can't overwrite the
+                # orchestrator's own bookkeeping (delegatable_agents,
+                # research_coverage) in the shared dict.
                 extra=dict(parent_context.extra),
             )
             result = await self.run(sub_agent, sub_context, depth=depth, guard=guard)

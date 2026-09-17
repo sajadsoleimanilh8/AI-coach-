@@ -27,6 +27,12 @@ logger = get_logger("rag.graph")
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 _NAME_MAX_CHARS = 200
 
+# A graph-expanded chunk has, by construction, little or no lexical overlap
+# with the query — that is the point of expanding. Scoring it purely on
+# cosine/keyword would therefore rank it last and the reranker would drop
+# it, defeating the feature. Instead it enters the rerank carrying a
+# provenance score: "reachable from something the query DID match", decayed
+# per hop so a two-hop connection is weaker evidence than a one-hop one.
 _HOP_ONE_AFFINITY = 0.5
 _HOP_DECAY = 0.7
 
@@ -86,6 +92,9 @@ class EntityExtractor:
     pulling (entity, relation, entity) triples out of prose is a language
     task with no deterministic equivalent. Everything downstream of it
     (traversal, capping, scoring) is arithmetic.
+
+    Skipped entirely when disabled: extract() returns nothing and makes no
+    provider call at all, so a NEXUS with graph RAG off never pays for it.
     """
 
     def __init__(self, router: ModelRouter, *, enabled: bool = True, batch_size: int = 4) -> None:
@@ -99,6 +108,9 @@ class EntityExtractor:
 
         all_triples: list[Triple] = []
         total = Usage()
+        # Batched rather than one call per chunk: extraction quality barely
+        # changes but the call count drops by batch_size, and this runs over
+        # every chunk of every ingested document.
         for start in range(0, len(chunks), self._batch_size):
             batch = chunks[start : start + self._batch_size]
             triples, usage = await self._extract_batch(batch)
@@ -237,6 +249,9 @@ class GraphRetriever:
     returns ADDITIONAL chunks connected through shared entities — material
     that is genuinely relevant but shares no vocabulary with the query, and
     so is invisible to pure vector search.
+
+    Hop and node caps are enforced here, in the traversal loop, not
+    requested of a model.
     """
 
     def __init__(self, graph_store: GraphStore) -> None:
@@ -269,6 +284,8 @@ class GraphRetriever:
             return GraphExpansion(chunks=[], nodes_visited=0, hops_used=0)
 
         visited_names: set[str] = set(frontier_names)
+        # name -> the hop at which it was first reached, which becomes the
+        # provenance score of any chunk it pulls in.
         reached_at_hop: dict[str, int] = {}
         hops_used = 0
 

@@ -1,6 +1,38 @@
 """
 Build datasets/derived/field_clipped/ -- the field dataset with polygon
 coordinates clipped into [0, 1].
+
+WHY
+    The field polygons are pitch quadrilaterals whose vertices legitimately
+    extend past the frame edge (the touchline continues beyond what the
+    camera sees) by up to 0.192 normalised units. Ultralytics rejects those
+    labels outright rather than clipping them:
+
+        ultralytics/data/utils.py:271-272
+            points = lb[:, 1:]                      # xywh from segments2boxes
+            assert points.max() <= 1.01, "non-normalized or out of bounds ..."
+
+    Note it checks the box DERIVED from the polygon, not the vertices: a
+    polygon spanning -0.011..1.007 has width 1.018, which trips the 1.01
+    tolerance. The whole image is then dropped as "corrupt".
+
+    Measured cost on the raw dataset: 448 of 841 train images (53%), 21 of
+    35 valid and 8 of 15 test were silently discarded, so the field model
+    trained on 46.7% of its data and was evaluated on 7 test images.
+
+WHY CLIPPING IS CORRECT, NOT A FUDGE
+    A segmentation mask describes what is visible IN THE IMAGE. Vertices
+    outside the frame are an annotation-export artifact; the pitch region
+    genuinely stops at the frame boundary. Clipping preserves the visible
+    region exactly and changes nothing a model could have learned.
+
+SOURCE IS NEVER MODIFIED
+    Reads datasets/processed/calibration_dataset/ (yes -- that directory
+    holds the FIELD data, see configs/datasets.yaml's naming warning) and
+    writes a separate tree. Images are hard-linked where the filesystem
+    allows it, so no image bytes are duplicated; labels are rewritten.
+
+    python -m scripts.build_field_clipped
 """
 
 from __future__ import annotations
@@ -8,10 +40,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from configs import registry as R  # noqa: E402
 
@@ -30,6 +59,7 @@ def clip_label_text(text: str) -> tuple[str, bool]:
         clipped = [min(1.0, max(0.0, v)) for v in coords]
         if any(abs(a - b) > 1e-9 for a, b in zip(coords, clipped)):
             modified = True
+        # %g keeps the files compact and avoids trailing float noise
         out_lines.append(cls + " " + " ".join(f"{v:.6g}" for v in clipped))
     return "\n".join(out_lines) + "\n", modified
 
@@ -38,9 +68,9 @@ def link_or_copy(src: Path, dst: Path) -> None:
     if dst.exists():
         return
     try:
-        os.link(src, dst)
+        os.link(src, dst)          # hard link: no duplicated image bytes
     except OSError:
-        shutil.copy2(src, dst)
+        shutil.copy2(src, dst)     # different volume / no link support
 
 
 def main() -> int:
@@ -49,6 +79,7 @@ def main() -> int:
                     help="output root (default: <datasets>/derived/field_clipped)")
     args = ap.parse_args()
 
+    # The field dataset's single source dir (see configs/datasets.yaml).
     src_root = R.dataset_source_dirs("field")[0]
     out_root = Path(args.out) if args.out else (
         R.dataset_root().parent / "derived" / "field_clipped")
@@ -99,6 +130,7 @@ def main() -> int:
           f"clipped={totals['clipped']:,}  unchanged={totals['unchanged']:,}")
     print(f"  source left untouched: {src_root}")
 
+    # ---- verify against ultralytics' own rule -------------------------
     import numpy as np
     bad = []
     for split in SPLITS:
@@ -106,10 +138,10 @@ def main() -> int:
             rows = [x.split() for x in lbl.read_text(encoding="utf-8").strip().splitlines() if x]
             if not rows:
                 continue
-            if any(len(x) > 6 for x in rows):
+            if any(len(x) > 6 for x in rows):        # segment rows
                 segs = [np.array(x[1:], dtype=np.float32).reshape(-1, 2) for x in rows]
                 boxes = []
-                for s in segs:
+                for s in segs:                        # emulate segments2boxes
                     x, y = s.T
                     x1, y1, x2, y2 = x.min(), y.min(), x.max(), y.max()
                     boxes.append([(x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1])

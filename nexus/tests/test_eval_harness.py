@@ -29,7 +29,7 @@ async def test_run_produces_a_well_formed_eval_run(_memory_db_env: str) -> None:
     assert len(run.suites) == 1
     assert run.suites[0].suite == "safety"
     assert len(run.suites[0].outcomes) > 0
-    assert run.config_snapshot
+    assert run.config_snapshot  # non-empty settings snapshot
 
 
 @pytest.mark.asyncio
@@ -54,6 +54,10 @@ async def test_default_suites_run_when_none_specified(_memory_db_env: str) -> No
 
 @pytest.mark.asyncio
 async def test_no_real_network_calls_by_default(_memory_db_env: str) -> None:
+    # If this ran against real providers it would either hang or raise a
+    # connection error against a non-existent local Ollama/cloud endpoint
+    # within a normal test timeout — completing quickly with all suites
+    # populated is itself evidence no real network call was attempted.
     harness = EvalHarness(use_real_providers=False)
 
     run = await harness.run(["routing", "tools"])

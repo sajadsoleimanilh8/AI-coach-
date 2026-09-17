@@ -112,7 +112,7 @@ async def test_stress_accumulation_fires_on_rising_stress() -> None:
     analyzer = _analyzer(
         {"mental.stress": _dim("mental.stress", 0.7)},
         {},
-        history={"mental.stress": _declining_points(now, 0.3, 0.15)},
+        history={"mental.stress": _declining_points(now, 0.3, 0.15)},  # rising raw value
     )
     analysis = await analyzer.analyze("u1")
     assert any(p.name == "stress_accumulation" for p in analysis.patterns)
@@ -124,7 +124,7 @@ async def test_stress_accumulation_silent_when_falling() -> None:
     analyzer = _analyzer(
         {"mental.stress": _dim("mental.stress", 0.3)},
         {},
-        history={"mental.stress": _declining_points(now, 0.7, -0.15)},
+        history={"mental.stress": _declining_points(now, 0.7, -0.15)},  # falling raw value = improving
     )
     analysis = await analyzer.analyze("u1")
     assert not any(p.name == "stress_accumulation" for p in analysis.patterns)
