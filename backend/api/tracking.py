@@ -12,8 +12,8 @@ per-frame data those endpoints don't expose. Two endpoints:
     in one payload isn't a viable API shape.
   - GET /api/matches/{match_id}/heatmap/{player_id}: server-aggregated
     pitch-coordinate density grid, gated on homography_confidence the same
-    honesty pattern as TeamMetric/PlayerMetric (see backend/api/tactical.py's
-    DEFAULT_TEAM_SCOPE comment and TabTeamIntelligence.jsx's PitchVisual) --
+    honesty pattern as TeamMetric/PlayerMetric (see the team-selection
+    comment in backend/api/tactical.py and TabTeamIntelligence.jsx's PitchVisual) --
     never presents a heatmap as trustworthy when the upstream pitch
     coordinates aren't.
 """

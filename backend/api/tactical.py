@@ -16,47 +16,30 @@ from backend.database.session import get_db
 router = APIRouter(prefix="/api/tactical", tags=["tactical"])
 team_intel_router = APIRouter(prefix="/api/team_intelligence", tags=["team_intelligence"])
 
+# Which team a request is about.
+#
 # The pipeline writes team-level metrics under "team-home"/"team-away" when
 # jersey-colour team assignment produces a split, and under "unassigned" only
-# when it does not (see backend/pipeline/runner.py::_score_team_intelligence).
-# The default scope here is "unassigned", so a caller that wants a split team
-# must pass ?team_id=team-home or ?team_id=team-away.
-DEFAULT_TEAM_SCOPE = "unassigned"
+# when it does not (see backend/pipeline/team_scoring.py). These routes used to
+# default team_id to "unassigned", so a request that did not name a team found
+# nothing for every match where the split worked -- which is the normal case.
+#
+# Now team_id is optional. Named: exactly that team. Omitted: the teams that
+# actually exist for this match. /formation returns one metric, so it takes
+# the first of TEAM_PREFERENCE that has a row (the response's team_id says
+# which); /team_shape returns a list, so it returns every team's rows.
+TEAM_PREFERENCE = ("team-home", "team-away", "unassigned")
+
+TEAM_ID_QUERY = Query(
+    default=None,
+    description="team-home, team-away or unassigned. Omit to use the teams this match actually has.",
+)
+
+SHAPE_METRICS = ["compactness_score", "formation_stability_score", "pressing_intensity_score", "weak_zone_map"]
 
 
-@router.get("/formation/{match_id}", response_model=TeamMetricResponse)
-def get_formation(
-    match_id: str,
-    team_id: str = Query(default=DEFAULT_TEAM_SCOPE),
-    db: Session = Depends(get_db),
-):
-    scope = f"formation:{team_id}"
-    cached = get_cached_metrics(match_id, scope)
-    if cached:
-        return cached
-
-    metric = (
-        db.query(TeamMetric)
-        .filter(
-            TeamMetric.match_id == match_id,
-            TeamMetric.team_id == team_id,
-            TeamMetric.metric_name == "formation",
-        )
-        .first()
-    )
-
-    if not metric:
-        # No fallback value. A made-up formation label next to a
-        # "low_upstream_confidence" badge is more misleading than an honest
-        # "not computed yet": it looks like a measurement when none exists.
-        # So a missing row is a 404, never a placeholder formation.
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No formation metric computed yet for match_id={match_id}, team_id={team_id}. "
-                   f"Upload and process a video for this match first.",
-        )
-
-    res = {
+def _serialize(metric: TeamMetric) -> dict:
+    return {
         "metric_id": metric.metric_id,
         "match_id": metric.match_id,
         "team_id": metric.team_id,
@@ -71,6 +54,46 @@ def get_formation(
         "schema_version": metric.schema_version,
     }
 
+
+def _team_rank(team_id: str | None) -> tuple[int, str]:
+    """Order teams by TEAM_PREFERENCE, anything unexpected last (alphabetically)."""
+    if team_id in TEAM_PREFERENCE:
+        return TEAM_PREFERENCE.index(team_id), ""
+    return len(TEAM_PREFERENCE), team_id or ""
+
+
+@router.get("/formation/{match_id}", response_model=TeamMetricResponse)
+def get_formation(
+    match_id: str,
+    team_id: str | None = TEAM_ID_QUERY,
+    db: Session = Depends(get_db),
+):
+    scope = f"formation:{team_id or 'auto'}"
+    cached = get_cached_metrics(match_id, scope)
+    if cached:
+        return cached
+
+    query = db.query(TeamMetric).filter(
+        TeamMetric.match_id == match_id,
+        TeamMetric.metric_name == "formation",
+    )
+    if team_id is not None:
+        query = query.filter(TeamMetric.team_id == team_id)
+    candidates = sorted(query.all(), key=lambda m: _team_rank(m.team_id))
+
+    if not candidates:
+        # No fallback value. A made-up formation label next to a
+        # "low_upstream_confidence" badge is more misleading than an honest
+        # "not computed yet": it looks like a measurement when none exists.
+        # So a missing row is a 404, never a placeholder formation.
+        which = f", team_id={team_id}" if team_id else ""
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No formation metric computed yet for match_id={match_id}{which}. "
+                   f"Upload and process a video for this match first.",
+        )
+
+    res = _serialize(candidates[0])
     set_cached_metrics(match_id, scope, res)
     return res
 
@@ -78,43 +101,23 @@ def get_formation(
 @router.get("/team_shape/{match_id}", response_model=list[TeamMetricResponse])
 def get_team_shape(
     match_id: str,
-    team_id: str = Query(default=DEFAULT_TEAM_SCOPE),
+    team_id: str | None = TEAM_ID_QUERY,
     db: Session = Depends(get_db),
 ):
-    scope = f"team_shape:{team_id}"
+    scope = f"team_shape:{team_id or 'auto'}"
     cached = get_cached_metrics(match_id, scope)
     if cached:
         return cached
 
-    shape_names = ["compactness_score", "formation_stability_score", "pressing_intensity_score", "weak_zone_map"]
-    metrics = (
-        db.query(TeamMetric)
-        .filter(
-            TeamMetric.match_id == match_id,
-            TeamMetric.team_id == team_id,
-            TeamMetric.metric_name.in_(shape_names),
-        )
-        .all()
+    query = db.query(TeamMetric).filter(
+        TeamMetric.match_id == match_id,
+        TeamMetric.metric_name.in_(SHAPE_METRICS),
     )
+    if team_id is not None:
+        query = query.filter(TeamMetric.team_id == team_id)
+    metrics = sorted(query.all(), key=lambda m: (_team_rank(m.team_id), m.metric_name))
 
-    results = [
-        {
-            "metric_id": m.metric_id,
-            "match_id": m.match_id,
-            "team_id": m.team_id,
-            "metric_name": m.metric_name,
-            "value": m.value,
-            "method": m.method.value,
-            "confidence": m.confidence.value,
-            "confidence_score": m.confidence_score,
-            "sample_size": m.sample_size,
-            "sub_scores": m.sub_scores,
-            "computed_at": m.computed_at,
-            "schema_version": m.schema_version,
-        }
-        for m in metrics
-    ]
-
+    results = [_serialize(m) for m in metrics]
     set_cached_metrics(match_id, scope, results)
     return results
 
@@ -127,23 +130,7 @@ def get_team_intelligence(match_id: str, db: Session = Depends(get_db)):
         return cached
 
     metrics = db.query(TeamMetric).filter(TeamMetric.match_id == match_id).all()
-    results = [
-        {
-            "metric_id": m.metric_id,
-            "match_id": m.match_id,
-            "team_id": m.team_id,
-            "metric_name": m.metric_name,
-            "value": m.value,
-            "method": m.method.value,
-            "confidence": m.confidence.value,
-            "confidence_score": m.confidence_score,
-            "sample_size": m.sample_size,
-            "sub_scores": m.sub_scores,
-            "computed_at": m.computed_at,
-            "schema_version": m.schema_version,
-        }
-        for m in metrics
-    ]
+    results = [_serialize(m) for m in metrics]
 
     set_cached_metrics(match_id, scope, results)
     return results
