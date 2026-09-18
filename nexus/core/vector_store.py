@@ -22,6 +22,14 @@ class VectorStore(ABC):
     chat.py.
     """
 
+    async def init(self) -> None:  # noqa: B027 - deliberately optional, not abstract
+        """Prepare storage (e.g. create tables) before first use.
+
+        Part of the interface because nexus/api/services.py calls it on every
+        store at startup. A no-op by default so a store that needs no setup,
+        and the test fakes, do not have to implement it.
+        """
+
     @abstractmethod
     async def add_chunks(
         self, *, doc_id: str, chunks: list[str], embeddings: list[list[float]]
