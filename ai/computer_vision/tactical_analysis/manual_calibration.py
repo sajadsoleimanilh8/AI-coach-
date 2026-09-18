@@ -15,11 +15,11 @@ angle is fast, reliable, and removes an entire class of CV failure modes
 discoloration, rain, etc.) from the critical path.
 
 Usage (interactive, needs a display):
-    python3 calibrate_pitch.py --video match_clip.mp4 --frame 0 \
+    python -m ai.computer_vision.tactical_analysis.manual_calibration --video match_clip.mp4 --frame 0 \
         --out calibrations/match_999.json
 
 Usage (headless / no display, e.g. CI or this sandbox):
-    python3 calibrate_pitch.py --points-file manual_clicks.json \
+    python -m ai.computer_vision.tactical_analysis.manual_calibration --points-file manual_clicks.json \
         --out calibrations/match_999.json
     # manual_clicks.json: {"point_name": [x_px, y_px], ...}
     # point_name must be a key in constants.REFERENCE_POINTS
