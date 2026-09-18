@@ -65,14 +65,6 @@ class FakeCloudProvider(AIProvider):
         return len(text)
 
 
-@pytest.fixture(scope="module")
-def _memory_db_env(tmp_path_factory) -> str:
-    db_path = str(tmp_path_factory.mktemp("nexus-classification") / "nexus.db")
-    os.environ["NEXUS_MEMORY__DATABASE_PATH"] = db_path
-    yield db_path
-    os.environ.pop("NEXUS_MEMORY__DATABASE_PATH", None)
-
-
 async def _make_client(app) -> AsyncIterator[AsyncClient]:
     async with app.router.lifespan_context(app):
         provider_manager = ProviderManager(

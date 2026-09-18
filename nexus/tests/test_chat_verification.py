@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import AsyncIterator
 
 import pytest
@@ -53,14 +52,6 @@ class _FakeFactChecker:
 class _FakeJudge:
     async def judge(self, **kwargs):
         return None
-
-
-@pytest.fixture(scope="module")
-def _memory_db_env(tmp_path_factory) -> str:
-    db_path = str(tmp_path_factory.mktemp("nexus-chat-verify") / "nexus.db")
-    os.environ["NEXUS_MEMORY__DATABASE_PATH"] = db_path
-    yield db_path
-    os.environ.pop("NEXUS_MEMORY__DATABASE_PATH", None)
 
 
 @pytest.fixture

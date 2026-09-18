@@ -66,3 +66,7 @@ backend/database/*.db
 Thumbs.db
 *.swp
 
+
+# Local agent scratch: .claude/worktrees/ holds full checkouts of this repo
+# (currently an 11 MB stale copy). Never commit them.
+.claude/worktrees/

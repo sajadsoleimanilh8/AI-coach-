@@ -8,16 +8,6 @@ from nexus.config.settings import get_settings
 from nexus.evaluation.runner import EvalHarness
 
 
-@pytest.fixture(scope="module")
-def _memory_db_env(tmp_path_factory) -> str:
-    db_path = str(tmp_path_factory.mktemp("nexus-eval-harness") / "nexus.db")
-    os.environ["NEXUS_MEMORY__DATABASE_PATH"] = db_path
-    get_settings(refresh=True)
-    yield db_path
-    os.environ.pop("NEXUS_MEMORY__DATABASE_PATH", None)
-    get_settings(refresh=True)
-
-
 @pytest.mark.asyncio
 async def test_run_produces_a_well_formed_eval_run(_memory_db_env: str) -> None:
     harness = EvalHarness(use_real_providers=False)

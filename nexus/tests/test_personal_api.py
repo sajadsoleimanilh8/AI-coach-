@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import AsyncIterator
 
 import pytest
@@ -8,14 +7,6 @@ from httpx import ASGITransport, AsyncClient
 
 from nexus.api.main import create_app
 from nexus.config.settings import get_settings
-
-
-@pytest.fixture(scope="module")
-def _memory_db_env(tmp_path_factory) -> str:
-    db_path = str(tmp_path_factory.mktemp("nexus-personal") / "nexus.db")
-    os.environ["NEXUS_MEMORY__DATABASE_PATH"] = db_path
-    yield db_path
-    os.environ.pop("NEXUS_MEMORY__DATABASE_PATH", None)
 
 
 @pytest.fixture

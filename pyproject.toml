@@ -130,3 +130,12 @@ warn_unused_configs = true
 warn_redundant_casts = true
 no_implicit_optional = true
 exclude = '(^venv/|^\.claude/worktrees/|^frontend/)'
+
+[tool.coverage.run]
+source = ["ai", "backend", "nexus", "configs", "training"]
+omit = ["*/tests/*", "*/alembic/versions/*"]
+
+[tool.coverage.report]
+skip_empty = true
+show_missing = false
+precision = 1

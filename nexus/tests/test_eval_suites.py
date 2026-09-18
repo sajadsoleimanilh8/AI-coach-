@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import os
-
 import pytest
 
-from nexus.config.settings import get_settings
 from nexus.evaluation.runner import EvalHarness
 from nexus.evaluation.suites.classification_eval import ClassificationEvaluator
 from nexus.evaluation.suites.rag_eval import RagEvaluator
@@ -13,16 +10,6 @@ from nexus.evaluation.suites.safety_eval import SafetyEvaluator
 from nexus.evaluation.suites.tools_eval import ToolsEvaluator
 from nexus.evaluation.suites.verification_eval import VerificationEvaluator
 from nexus.evaluation.types import EvalCase
-
-
-@pytest.fixture(scope="module")
-def _memory_db_env(tmp_path_factory) -> str:
-    db_path = str(tmp_path_factory.mktemp("nexus-eval-suites") / "nexus.db")
-    os.environ["NEXUS_MEMORY__DATABASE_PATH"] = db_path
-    get_settings(refresh=True)
-    yield db_path
-    os.environ.pop("NEXUS_MEMORY__DATABASE_PATH", None)
-    get_settings(refresh=True)
 
 
 @pytest.fixture

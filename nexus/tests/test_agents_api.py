@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -84,14 +83,6 @@ class _FakeAgentProvider(AIProvider):
 
     def count_tokens(self, text: str, *, model_id: str) -> int:
         return len(text)
-
-
-@pytest.fixture(scope="module")
-def _memory_db_env(tmp_path_factory) -> str:
-    db_path = str(tmp_path_factory.mktemp("nexus-agents") / "nexus.db")
-    os.environ["NEXUS_MEMORY__DATABASE_PATH"] = db_path
-    yield db_path
-    os.environ.pop("NEXUS_MEMORY__DATABASE_PATH", None)
 
 
 @pytest.fixture

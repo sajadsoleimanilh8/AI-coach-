@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -101,14 +100,6 @@ class _FakeSportsAdapter(SportsDataAdapter):
         return MatchAnalysis(
             match_id="m1", team_metrics=[], player_metrics=[available], unavailable=[], coverage=1.0,
         )
-
-
-@pytest.fixture(scope="module")
-def _memory_db_env(tmp_path_factory) -> str:
-    db_path = str(tmp_path_factory.mktemp("nexus-group-c") / "nexus.db")
-    os.environ["NEXUS_MEMORY__DATABASE_PATH"] = db_path
-    yield db_path
-    os.environ.pop("NEXUS_MEMORY__DATABASE_PATH", None)
 
 
 @pytest.fixture

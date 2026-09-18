@@ -14,11 +14,9 @@ No GPU, no torch, no network: every provider here is a local recorder.
 from __future__ import annotations
 
 import json
-import os
 
 import pytest
 
-from nexus.config.settings import get_settings
 from nexus.core.exceptions import ModelNotFoundError, ProviderUnavailableError
 from nexus.core.provider_manager import ProviderManager
 from nexus.core.providers import AIProvider
@@ -33,16 +31,6 @@ from nexus.training.evaluate import is_promotable
 from nexus.verification.fact_checker import FactChecker
 
 _SAFETY_SUITE = "safety"
-
-
-@pytest.fixture(scope="module")
-def _memory_db_env(tmp_path_factory):
-    db_path = str(tmp_path_factory.mktemp("nexus-promotion-gate") / "nexus.db")
-    os.environ["NEXUS_MEMORY__DATABASE_PATH"] = db_path
-    get_settings(refresh=True)
-    yield db_path
-    os.environ.pop("NEXUS_MEMORY__DATABASE_PATH", None)
-    get_settings(refresh=True)
 
 
 class _RecordingProvider(AIProvider):
