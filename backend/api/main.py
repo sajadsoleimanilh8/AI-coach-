@@ -1,6 +1,8 @@
 import json
 import logging
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -57,10 +59,28 @@ ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mpeg", ".mpg", ".mov", ".avi", ".webm", ".
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024)))
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Startup work. Replaces the deprecated @app.on_event("startup")."""
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    # Schema bootstrap for SQLite only -- the local dev/test database, where a
+    # migration step would just be friction. On any other backend (Postgres in
+    # docker-compose.yml) the schema is owned by Alembic: creating tables here
+    # too would let the running app and the migration history disagree without
+    # anything noticing. Run: alembic upgrade head
+    if engine.dialect.name == "sqlite":
+        Base.metadata.create_all(bind=engine)
+    else:
+        logger.info("Non-SQLite database: schema is managed by Alembic (alembic upgrade head).")
+    yield
+
+
 app = FastAPI(
     title="SportsStrategyCoachAI Backend",
     version="0.1.0",
     description="Video upload, processing status, and analysis JSON API.",
+    lifespan=lifespan,
     # Applied on the constructor, not per-router, so a router added later cannot
     # accidentally ship unauthenticated. Inert unless SSC_API_KEY is set.
     dependencies=[Depends(require_api_key)],
@@ -110,20 +130,6 @@ app.include_router(prematch_health.router)
 app.include_router(psychology.router)
 app.include_router(simulation.router)
 app.include_router(calibration_debug.router)
-
-
-@app.on_event("startup")
-def startup():
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    # Schema bootstrap for SQLite only -- the local dev/test database, where a
-    # migration step would just be friction. On any other backend (Postgres in
-    # docker-compose.yml) the schema is owned by Alembic: creating tables here
-    # too would let the running app and the migration history disagree without
-    # anything noticing. Run: alembic upgrade head
-    if engine.dialect.name == "sqlite":
-        Base.metadata.create_all(bind=engine)
-    else:
-        logger.info("Non-SQLite database: schema is managed by Alembic (alembic upgrade head).")
 
 
 @app.get("/health")
