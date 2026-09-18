@@ -1,3 +1,9 @@
+> **Superseded.** This is one of four design docs that were written
+> independently and disagreed on field names and types.
+> [`docs/database_schema.md`](database_schema.md) reconciles them and is the
+> single source of truth; where this file conflicts with it, that one wins.
+> Kept for the reasoning it records, not as a current specification.
+
 # D. Player & Ball Tracking System Design
 
 ## Overview

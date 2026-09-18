@@ -12,7 +12,7 @@ Source: job `cf53abee-e417-4b4b-9778-42018fd8631d` (match `ddfc1819-af08-4429-bd
 
 | Stage | Seconds | Detail |
 |---|---|---|
-| `detection_tracking` | 5.6175 | model=D:\SportsStrategyCoachAI\SportsStrategyCoachAI\models\yolo\player_v1\weights\best.pt device=cuda:0 |
+| `detection_tracking` | 5.6175 | model=models/yolo/player_v1/weights/best.pt device=cuda:0 |
 | `team_assignment` | 0.6319 | - |
 | `frame_synchronisation` | 6.7848 | - |
 | `calibration_history` | 0.0043 | - |

@@ -1,0 +1,17 @@
+{
+  "frames_processed": 375,
+  "row_counts": {
+    "ball_detections": 17,
+    "calibration_status": 113,
+    "events": 20,
+    "frames": 75,
+    "matches": 1,
+    "player_detections": 249,
+    "player_metrics": 243,
+    "player_tracking": 1242,
+    "processing_jobs": 1,
+    "team_metrics": 5,
+    "videos": 1
+  },
+  "sha256": "1d1eb009c5450d22bd3b0c0410b8bf3bd86db7515325c6a0ac67b8ab80ceed8f"
+}

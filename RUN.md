@@ -57,7 +57,7 @@ PowerShell, open it again, and retry. If it still fails, reinstall that program.
 
 ```powershell
 cd C:\
-git clone https://github.com/sajadsoleimanilh8/AI-coach-strategy.git ssc
+git clone https://github.com/sajadsoleimanilh8/AI-coach-.git ssc
 cd C:\ssc
 ```
 

@@ -1,6 +1,6 @@
 # AI Coach — Competition Presentation Package
 
-Built from a full codebase audit on 2026-08-17 (repo: `sajadsoleimanilh8/AI-coach-strategy`, active checkout `SportsStrategyCoachAI`). Every claim below is traceable to real code. Where the codebase has scaffolding, empty folders, or unresolved bugs, they are labeled as such — nothing here is invented.
+Built from a full codebase audit on 2026-08-17 (repo: `sajadsoleimanilh8/AI-coach-strategy`, since renamed to `sajadsoleimanilh8/AI-coach-`; active checkout `SportsStrategyCoachAI`). Every claim below is traceable to real code. Where the codebase has scaffolding, empty folders, or unresolved bugs, they are labeled as such — nothing here is invented.
 
 **Core message the whole deck reinforces:**
 

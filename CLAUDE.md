@@ -49,7 +49,9 @@ README.md and RUN.md.
 | Python lint | `venv\Scripts\python.exe -m ruff check .` |
 | Types (report only) | `venv\Scripts\python.exe -m mypy backend nexus configs ai` |
 | Frontend lint / build | `npm run lint` / `npm run build` in `frontend/web` |
+| Frontend unit tests | `npm run test:unit` in `frontend/web` (Vitest, <1 s) |
 | Browser tests | `npm test` in `frontend/web` (needs both APIs running and a processed match) |
+| Pipeline regression | `pytest tests/test_pipeline_e2e.py` (~25 s; needs `samples/` + checkpoints) |
 
 ## Security config
 
@@ -80,7 +82,14 @@ README.md and RUN.md.
 
 ## Known state (2026-09-17)
 
-- `ruff check .` passes; `pytest` is 1361 passed, 0 failed (~2.5 min).
+- `ruff check .` passes; coverage 79.2% overall, pipeline stages 86%.
+- **`tests/test_pipeline_e2e.py` fingerprints the real pipeline's output.** If
+  it fails after a change you did NOT intend to alter results, you changed
+  behaviour. If you did intend it, re-run with `SSC_UPDATE_PIPELINE_GOLDEN=1`
+  and commit the new `tests/golden/pipeline_sample_15s.json` with that change.
+- Import test helpers in `tests/` as sibling modules (`from pipeline_snapshot
+  import ...`): ultralytics installs a top-level `tests` package that shadows
+  `tests.*`.
 - mypy baseline: 508 errors in 92 files (CI reports but does not gate).
 - ESLint: 0 errors, 22 warnings. Most are React Compiler rules on `useAsync`,
   downgraded to warnings on purpose.

@@ -49,7 +49,7 @@ python -m training.train ball --status
 `train_calibration`, `train_goalpost`) still work and are equivalent.
 
 Set `SSC_DATASET_ROOT` to relocate the datasets (defaults to
-`D:/SportsStrategyCoachAI/datasets/processed` on Windows) and `SSC_MODEL_ROOT`
+`root_default_windows` in `configs/datasets.yaml`) and `SSC_MODEL_ROOT`
 to relocate checkpoints.
 
 These five models replaced a single combined 4-class detector loaded through

@@ -17,6 +17,22 @@ not inferred from directory names. Edges that do **not** exist are marked
 > `persistence.py`, `results.py`. Older references below that read
 > `runner.py::_some_stage()` mean the function in its new module; `runner.py`
 > re-exports them, so existing imports still resolve.
+
+## Added since the 2026-08-12 audit
+
+The audit below predates the September work. Same status marks as the table
+that follows.
+
+| Component | Status | What it is |
+|---|---|---|
+| Re-identification merge (`ai/computer_vision/player_tracking/reid_merge.py`) | ✅ | Appearance-based re-association of tracks ByteTrack dropped during occlusions, so one player is not scored as several half-players. Wired as pipeline stage `reid_merge`; disable with `SSC_REID_MERGE=0` to measure without it. |
+| Opponent weakness map (`ai/opponent_intelligence/weakness_map/`) | ✅ | Ranks named weaknesses and strengths from already-measured metrics. Never invents a number; an unmeasured metric is an absence, not a weakness. |
+| Counter-strategy generator (`ai/opponent_intelligence/counter_strategy_generator/`) | ✅ | Maps each weakness to a coachable adjustment. The trigger is data; the phrasing is a fixed playbook. |
+| Deterministic game plan (`nexus/sports/game_plan.py`) | ✅ | Builds the coach report's game-plan section from the two modules above with no LLM call; the model only narrates what is already decided. |
+| Narrative guard (`nexus/sports/narrative_guard.py`) | ✅ | Reads the generated narrative back and flags chronology or event claims the measured context cannot support (e.g. "in the first half…" on a 15-second clip). The coach then regenerates once; if the retry is still not clean it keeps the attempt with fewer such claims and returns it with those warnings attached, rather than silently. |
+| Coach report UI (`frontend/web/src/components/ui/CoachReport.jsx`) | ✅ | Renders the report with measured values and generated narrative shown separately. |
+| Tactical timeline (`nexus/sports/timeline.py`) | 🚧 | Defines and parses the timeline shape the coach expects, but no backend route serves it yet (`ai/team_intelligence/{possession,transition}_analysis/` are not built), so it currently returns `None` and the coach says so. |
+| End-to-end regression test (`tests/test_pipeline_e2e.py`) | ✅ | Runs the real pipeline on `samples/sample_15s.mp4` and compares the full output against a recorded fingerprint. Skips where the clip or checkpoints are absent (CI).
 | ⚠️ | Implemented but with a stated limitation that affects correctness |
 | 🚧 | Code exists but is dormant / not reachable from the production path |
 | ❌ | **MISSING** — does not exist anywhere in the repo |

@@ -22,8 +22,13 @@ All of these must pass. CI runs the same checks.
 ```bash
 venv\Scripts\python.exe -m ruff check .
 venv\Scripts\python.exe -m pytest -q
-cd frontend\web && npm run lint && npm run build
+cd frontend\web && npm run lint && npm run test:unit && npm run build
 ```
+
+If you have `samples/sample_15s.mp4` and the trained checkpoints locally, the
+suite also runs `tests/test_pipeline_e2e.py`, which fails if pipeline output
+changes at all. For an intended change, re-record the fingerprint with
+`SSC_UPDATE_PIPELINE_GOLDEN=1` and commit it alongside the change.
 
 mypy runs in CI as a report. Do not add new type errors to files you touch.
 

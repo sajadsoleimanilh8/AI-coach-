@@ -18,6 +18,7 @@ of silently shipping stale/fake numbers.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,6 +27,18 @@ from backend.database.models import AnalysisResult, ProcessingJob, ProcessingSta
 from backend.database.session import SessionLocal  # noqa: E402
 
 DOC_PATH = Path(__file__).resolve().parents[1] / "docs" / "pipeline_latency_profile.md"
+
+# Stage details carry the checkpoint path the run actually used, e.g.
+# "model=D:\...\models\yolo\player_v1\weights\best.pt". That is right for the
+# run and wrong for a committed doc: it leaks one machine's directory layout.
+# Keep everything from the `models` directory down, with forward slashes.
+_ABSOLUTE_MODEL_PATH = re.compile(r"(?:[A-Za-z]:)?[\\/][^\s|]*?[\\/](models[\\/][^\s|]+)")
+
+
+def _portable_detail(detail: str | None) -> str | None:
+    if not detail:
+        return detail
+    return _ABSOLUTE_MODEL_PATH.sub(lambda m: m.group(1).replace("\\", "/"), detail)
 
 NO_DATA_TEMPLATE = """# Pipeline Latency Profile
 
@@ -110,7 +123,7 @@ def generate(job_id: str | None = None) -> int:
 
         latency = result.result_json["pipeline_latency"]
         rows = "\n".join(
-            f"| `{s['stage']}` | {s['seconds']:.4f} | {s.get('detail') or '-'} |"
+            f"| `{s['stage']}` | {s['seconds']:.4f} | {_portable_detail(s.get('detail')) or '-'} |"
             for s in latency["stages"]
         )
         DOC_PATH.write_text(REPORT_TEMPLATE.format(

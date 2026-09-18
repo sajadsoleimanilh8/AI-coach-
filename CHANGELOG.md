@@ -70,6 +70,15 @@ Notable changes to this project. The format follows
 - GSAP is vendored in `frontend/web/public/vendor/gsap` (byte-identical to the
   cdnjs files it replaces), and the ~1,000-line inline `<style>` block moved to
   `src/styles/landing.css`. `index.html`: 1,966 lines to 949.
+- `test_homography.py` was one script-style `run()` with 26 assertions behind a
+  single pytest wrapper, so the first failure hid the rest. It is now 13
+  independent tests; the assertions are unchanged.
+- The `_memory_db_env` fixture, copy-pasted into 15 NEXUS test modules in five
+  variants, lives once in `nexus/tests/conftest.py`.
+- `RUN.md` pointed at the old repository URL; the repo is now
+  `sajadsoleimanilh8/AI-coach-`. Three superseded design docs carry a banner
+  pointing to `docs/database_schema.md`, and `docs/pipeline_architecture.md`
+  covers the September additions.
 - `ai/` no longer contains 58 empty `.gitkeep` directories; `ai/README.md`
   records which blueprint modules have no code.
 - Docker images are multi-stage, run as a non-root user, and declare
@@ -77,6 +86,14 @@ Notable changes to this project. The format follows
   videos out of the build context.
 
 ### Added
+- `tests/test_pipeline_e2e.py`: runs the real pipeline on `samples/sample_15s.mp4`
+  and compares every output row against a recorded fingerprint
+  (`tests/golden/pipeline_sample_15s.json`). Pipeline-stage coverage went from
+  roughly 12-27% to 86%. Skips where the clip or checkpoints are absent (CI).
+- Frontend unit tests (Vitest, `npm run test:unit`, 33 tests) for the API
+  client and `useAsync`/`useAction`, including a regression test for the
+  StrictMode bug where every submit hung forever. Wired into CI.
+- Coverage measurement (`pytest --cov`); baseline 79.2% of 14,730 statements.
 - `pyproject.toml`: the project can be installed with `pip install -e ".[dev,cv]"`.
 - Ruff (passes clean), a mypy baseline, and ESLint + Prettier for the frontend.
 - GitHub Actions CI: ruff, pytest with coverage, frontend lint and build, and

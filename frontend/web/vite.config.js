@@ -19,4 +19,9 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
   },
+  test: {
+    // Unit tests only. tests/*.spec.mjs are Playwright scripts that drive a
+    // real browser against running APIs; they run via `npm test`, not here.
+    include: ['src/**/*.test.{js,jsx}'],
+  },
 });
