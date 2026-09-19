@@ -25,7 +25,7 @@ import { EmptyState } from './States.jsx';
  * live overlay and the burned-in annotated video cannot disagree about which
  * team a player is on.
  */
-export function teamColour(teamId) {
+function teamColour(teamId) {
   const key = teamId === null || teamId === undefined ? '' : String(teamId).trim().toLowerCase();
   if (key === 'team-home' || key === 'home' || key === '0') return '#00d4ff';
   if (key === 'team-away' || key === 'away' || key === '1') return '#f472b6';
@@ -39,7 +39,7 @@ const INNER_W = VIEW_W - PAD * 2; // 360
 const INNER_H = VIEW_H - PAD * 2; // 240
 
 /** metres -> SVG units, for a pitch of the length/width the backend reports. */
-export function projectToPitch(xMetres, yMetres, lengthM, widthM) {
+function projectToPitch(xMetres, yMetres, lengthM, widthM) {
   return {
     x: PAD + (xMetres / lengthM) * INNER_W,
     y: PAD + (yMetres / widthM) * INNER_H,

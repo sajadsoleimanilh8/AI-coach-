@@ -19,21 +19,24 @@ export const POLL_MS = 1500;
  * here as a legitimate terminal status and not as a crash.
  */
 export function useJobStatus(jobId) {
-  const [state, setState] = useState({ status: 'idle', data: null, error: null });
+  const [state, setState] = useState({ status: jobId ? 'loading' : 'idle', data: null, error: null });
   const [nonce, setNonce] = useState(0);
   const retry = useCallback(() => setNonce((value) => value + 1), []);
 
+  // A new job (or a retry) resets to loading -- or idle with no job -- in the
+  // same render, rather than from the effect below (same pattern as useAsync).
+  const [prevInputs, setPrevInputs] = useState({ jobId, nonce });
+  if (prevInputs.jobId !== jobId || prevInputs.nonce !== nonce) {
+    setPrevInputs({ jobId, nonce });
+    setState({ status: jobId ? 'loading' : 'idle', data: null, error: null });
+  }
+
   useEffect(() => {
-    if (!jobId) {
-      setState({ status: 'idle', data: null, error: null });
-      return undefined;
-    }
+    if (!jobId) return undefined;
 
     const controller = new AbortController();
     let active = true;
     let timer = null;
-
-    setState({ status: 'loading', data: null, error: null });
 
     const tick = async () => {
       try {

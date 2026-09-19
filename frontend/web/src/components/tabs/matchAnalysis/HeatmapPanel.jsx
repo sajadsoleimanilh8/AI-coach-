@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import api from '../../../api/client.js';
 import { useAsync } from '../../../hooks/useAsync.js';
 import { MetaRow, MetricValue, Panel, PanelGrid, Slab } from '../../ui/Primitives.jsx';
@@ -11,8 +11,10 @@ import { HeatmapPitch } from '../../ui/Pitch.jsx';
 /* ==================================================================== */
 
 export function HeatmapPanel({ matchId, goToTab, dataEpoch = 0 }) {
-  const [playerId, setPlayerId] = useState(1);
-  const [requested, setRequested] = useState(null);
+  // pickedId: the player the user asked for. draftId: what is typed in the
+  // field but not yet submitted. Both null until the user acts.
+  const [pickedId, setPickedId] = useState(null);
+  const [draftId, setDraftId] = useState(null);
 
   // Player ids come from the authoritative list where one exists; this is a
   // discovery aid, not a requirement, so its failure is non-blocking.
@@ -40,20 +42,19 @@ export function HeatmapPanel({ matchId, goToTab, dataEpoch = 0 }) {
   // AUTO-SELECT. This panel used to render nothing at all until the user
   // typed a tracking id and pressed a button -- so the heatmap appeared
   // broken on a match that had perfectly good data, because nothing told the
-  // user an id was required and there was no way to know a valid one. The
-  // first id the backend reports is selected as soon as the roster arrives.
-  useEffect(() => {
-    if (requested === null && knownIds.length) {
-      setPlayerId(knownIds[0]);
-      setRequested(knownIds[0]);
-    }
-  }, [knownIds, requested]);
+  // user an id was required and there was no way to know a valid one. Until
+  // the user picks, the first id the backend reports is the selection.
+  const requested = pickedId ?? (knownIds.length ? knownIds[0] : null);
+  const playerId = draftId ?? requested ?? 1;
 
   // A new run invalidates the previous selection's data, and may change which
   // space has anything in it. Re-arm the fallback so it is judged again.
-  useEffect(() => {
+  // (Adjusted during render when the inputs change, not from an effect.)
+  const [armedFor, setArmedFor] = useState({ dataEpoch, requested });
+  if (armedFor.dataEpoch !== dataEpoch || armedFor.requested !== requested) {
+    setArmedFor({ dataEpoch, requested });
     setAutoFellBack(false);
-  }, [dataEpoch, requested]);
+  }
 
   const heatmap = useAsync(
     (signal) => api.getHeatmap(matchId, requested, space, signal),
@@ -71,14 +72,17 @@ export function HeatmapPanel({ matchId, goToTab, dataEpoch = 0 }) {
   // Only when there is genuinely something to fall back TO: a player with no
   // tracking rows at all (sample_size 0) has nothing in either space, and
   // switching would swap one honest empty state for another.
-  useEffect(() => {
-    const data = heatmap.data;
-    if (!data || autoFellBack) return;
-    if (data.space === 'pitch' && data.usable_sample_size === 0 && data.sample_size > 0) {
-      setAutoFellBack(true);
-      setSpace('image');
-    }
-  }, [heatmap.data, autoFellBack]);
+  //
+  // Decided during render from the response just received; it converges in
+  // one step because autoFellBack is set in the same update.
+  const pitchData = heatmap.data;
+  if (
+    pitchData && !autoFellBack &&
+    pitchData.space === 'pitch' && pitchData.usable_sample_size === 0 && pitchData.sample_size > 0
+  ) {
+    setAutoFellBack(true);
+    setSpace('image');
+  }
 
   if (!matchId) {
     return (
@@ -107,7 +111,7 @@ export function HeatmapPanel({ matchId, goToTab, dataEpoch = 0 }) {
           className="dash-form dash-form-inline"
           onSubmit={(event) => {
             event.preventDefault();
-            setRequested(Number(playerId));
+            setPickedId(Number(playerId));
           }}
         >
           <NumberField
@@ -115,7 +119,7 @@ export function HeatmapPanel({ matchId, goToTab, dataEpoch = 0 }) {
             value={playerId}
             min={0}
             step={1}
-            onChange={setPlayerId}
+            onChange={setDraftId}
             hint="ByteTrack tracking ID, scoped to this processed video."
           />
           <button type="submit" className="btn-primary dash-submit">
@@ -166,8 +170,8 @@ export function HeatmapPanel({ matchId, goToTab, dataEpoch = 0 }) {
                   type="button"
                   className={`dash-pill ${requested === id ? 'is-active' : ''}`.trim()}
                   onClick={() => {
-                    setPlayerId(id);
-                    setRequested(id);
+                    setDraftId(id);
+                    setPickedId(id);
                   }}
                 >
                   {id}

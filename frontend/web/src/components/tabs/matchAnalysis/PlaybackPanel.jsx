@@ -5,20 +5,12 @@ import { Chip, MetaRow, MetricValue, Slab } from '../../ui/Primitives.jsx';
 import { AsyncBlock, EmptyState } from '../../ui/States.jsx';
 import { NumberField } from '../../ui/Form.jsx';
 import { TrackingMinimap, TrackingOverlaySvg } from '../../ui/Pitch.jsx';
+import { WINDOW_FRAMES, needsNewWindow, windowContaining } from './paging.js';
 
 /* ==================================================================== */
 /* Playback + tracking overlay                                          */
 /* ==================================================================== */
 
-/** Frames per tracking request. Mirrors the server's own default window. */
-const WINDOW_FRAMES = 150;
-
-/**
- * How close to the end of the loaded window playback may get before the next
- * one is fetched. 40 frames is ~1.6s at 25fps -- enough time for the request
- * to land before the overlay would otherwise run out of data.
- */
-const PREFETCH_MARGIN_FRAMES = 40;
 
 /**
  * Tracks the <video> element's currentTime and reports it on every animation
@@ -167,42 +159,40 @@ export function PlaybackPanel({ videoId, matchId, dataEpoch = 0, seekRequest = n
   // AUTO-PAGING. The window is 150 frames -- six seconds. Before this, the
   // only way to move it was to type a start frame into a form and press a
   // button, so the overlay went blank six seconds into every clip and stayed
-  // blank. Playback position now drives the window: crossing near either edge
-  // loads the neighbouring one.
-  useEffect(() => {
-    if (!follow || !videoReady || !fps) return;
+  // blank. Playback position now drives the window: nearing its end, or
+  // seeking outside it in either direction, loads the window around the
+  // playhead. Adjusted during render -- it is derived from videoTime state.
+  if (follow && videoReady && fps) {
     const playhead = Math.floor(videoTime * fps);
-    const lowerBound = windowStart;
-    const upperBound = windowStart + WINDOW_FRAMES;
-
-    if (playhead >= upperBound - PREFETCH_MARGIN_FRAMES) {
-      const next = windowStart + WINDOW_FRAMES;
-      if (maxFrame === null || next <= maxFrame) setWindowStart(next);
-    } else if (playhead < lowerBound) {
-      // A backwards seek past the start of the window. Jump straight to the
-      // window containing the playhead rather than stepping back one at a
-      // time, which would need several round trips after a long rewind.
-      setWindowStart(Math.max(0, Math.floor(playhead / WINDOW_FRAMES) * WINDOW_FRAMES));
+    if (needsNewWindow(playhead, windowStart)) {
+      const next = windowContaining(playhead, maxFrame);
+      if (next !== windowStart) setWindowStart(next);
     }
-  }, [videoTime, fps, follow, videoReady, windowStart, maxFrame]);
+  }
 
   // A seek asked for from elsewhere on the page (the events timeline).
   // Keyed on the request's nonce so clicking the same event twice seeks
   // twice.
   const seekNonce = seekRequest?.nonce ?? null;
   const seekTime = seekRequest?.timestamp ?? null;
+
+  // A new seek request re-enables follow mode (and pages to the destination
+  // straight away) in the same render...
+  const [handledSeek, setHandledSeek] = useState(seekNonce);
+  if (seekNonce !== handledSeek) {
+    setHandledSeek(seekNonce);
+    if (seekNonce !== null && seekTime !== null) {
+      setFollow(true);
+      if (fps) setWindowStart(windowContaining(Math.floor(seekTime * fps), maxFrame));
+    }
+  }
+
+  // ...and moving the <video> element itself is the one part that is a side
+  // effect on something outside React, so it is all this effect does.
   useEffect(() => {
     if (seekNonce === null || seekTime === null) return;
     const video = videoRef.current;
-    if (!video) return;
-    setFollow(true);
-    video.currentTime = seekTime;
-    // Move the window with it, so the overlay has data at the destination
-    // without waiting for the auto-pager's next tick.
-    if (fps) {
-      const frame = Math.floor(seekTime * fps);
-      setWindowStart(Math.max(0, Math.floor(frame / WINDOW_FRAMES) * WINDOW_FRAMES));
-    }
+    if (video) video.currentTime = seekTime;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seekNonce]);
 

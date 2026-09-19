@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import api from '../../api/client.js';
 import { useAsync } from '../../hooks/useAsync.js';
@@ -52,7 +52,7 @@ function prettify(metricName) {
 }
 
 export default function TabPlayerIntelligence({ matchId, goToTab, onAttachMatch }) {
-  const [selectedPlayer, setSelectedPlayer] = useState(null);
+  const [pickedPlayer, setPickedPlayer] = useState(null);
 
   const roster = useAsync(
     (signal) => api.getPlayerIntelligence(matchId, signal),
@@ -60,17 +60,12 @@ export default function TabPlayerIntelligence({ matchId, goToTab, onAttachMatch 
     { enabled: Boolean(matchId) },
   );
 
-  // Reset the selection whenever the match changes, so a tracking ID from a
-  // previous match can never be shown under a new match's header.
-  useEffect(() => {
-    setSelectedPlayer(null);
-  }, [matchId]);
-
-  useEffect(() => {
-    if (selectedPlayer === null && Array.isArray(roster.data) && roster.data.length) {
-      setSelectedPlayer(roster.data[0].player_id);
-    }
-  }, [roster.data, selectedPlayer]);
+  // A tracking ID from a previous match can never be shown under a new
+  // match's header: DashboardApp keys this tab by matchId, so a new match is a
+  // fresh component. Until the user picks someone, the first roster entry is
+  // the selection -- derived here rather than copied into state by an effect.
+  const selectedPlayer =
+    pickedPlayer ?? (Array.isArray(roster.data) && roster.data.length ? roster.data[0].player_id : null);
 
   return (
     <TabSection animKey={`player-${matchId}`}>
@@ -95,7 +90,7 @@ export default function TabPlayerIntelligence({ matchId, goToTab, onAttachMatch 
               <RosterStrip
                 players={players}
                 selected={selectedPlayer}
-                onSelect={setSelectedPlayer}
+                onSelect={setPickedPlayer}
               />
               <PlayerDetail matchId={matchId} playerId={selectedPlayer} roster={players} />
             </>

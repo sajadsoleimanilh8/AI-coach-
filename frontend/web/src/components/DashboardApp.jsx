@@ -24,7 +24,7 @@ import TabCoachChat from './tabs/TabCoachChat.jsx';
  * props. A tab never derives a match id of its own.
  */
 
-export const TABS = [
+const TABS = [
   { id: 'match', num: '01', label: 'Match Analysis', short: 'Match', matchScoped: false },
   { id: 'player', num: '02', label: 'Player Intelligence', short: 'Player', matchScoped: true },
   { id: 'team', num: '03', label: 'Team Intelligence', short: 'Team', matchScoped: true },
@@ -35,7 +35,7 @@ export const TABS = [
   { id: 'coach', num: '08', label: 'Coach Chat', short: 'Coach', matchScoped: false },
 ];
 
-export const DEFAULT_TAB = 'match';
+const DEFAULT_TAB = 'match';
 
 const isKnownTab = (tabId) => TABS.some((tab) => tab.id === tabId);
 
@@ -323,10 +323,13 @@ export default function DashboardApp() {
           // boundary: a crash in one tab never follows the user to the next.
           <ErrorBoundary key={active.id}>
         {active.id === 'match' && <TabMatchAnalysis {...shared} />}
-        {active.id === 'player' && <TabPlayerIntelligence {...shared} />}
-        {active.id === 'team' && <TabTeamIntelligence {...shared} />}
+        {/* Match-scoped tabs are keyed by match, so switching match remounts
+            them with fresh state (selection, interventions, in-flight requests)
+            instead of each tab resetting itself from an effect. */}
+        {active.id === 'player' && <TabPlayerIntelligence key={matchId} {...shared} />}
+        {active.id === 'team' && <TabTeamIntelligence key={matchId} {...shared} />}
         {active.id === 'calibration' && <TabCalibration {...shared} />}
-        {active.id === 'simulation' && <TabSimulation {...shared} />}
+        {active.id === 'simulation' && <TabSimulation key={matchId} {...shared} />}
         {active.id === 'health' && <TabPreMatchHealth {...shared} />}
         {active.id === 'psychology' && <TabPsychology {...shared} />}
         {active.id === 'coach' && <TabCoachChat {...shared} />}

@@ -19,12 +19,10 @@ export default [
     rules: {
       ...js.configs.recommended.rules,
       ...reactHooks.configs.recommended.rules,
-      // React Compiler rules introduced in eslint-plugin-react-hooks v7. The flagged
-      // hooks (useAsync/useAction) were debugged against StrictMode double-invoke;
-      // rewriting them to satisfy these is a behavioural change, so they report as
-      // warnings until that refactor is done deliberately.
-      "react-hooks/set-state-in-effect": "warn",
-      "react-hooks/refs": "warn",
+      // React Compiler rules from eslint-plugin-react-hooks v7 stay at the
+      // recommended "error" level: the codebase was brought into line with them
+      // (render-time state adjustment instead of setState-in-effect), and doing
+      // so exposed a real paging loop in PlaybackPanel -- see paging.js.
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
       // JSX usage is not tracked without eslint-plugin-react; ignore capitalised
       // names so imported components are not reported as unused.

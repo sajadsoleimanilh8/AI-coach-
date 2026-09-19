@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import api from '../../api/client.js';
 import { useAsync } from '../../hooks/useAsync.js';
@@ -29,7 +29,7 @@ import { SelectMatchState } from '../ui/MatchPicker.jsx';
  * this tab renders that 404 as the stated empty state it is.
  */
 export default function TabTeamIntelligence({ matchId, goToTab, onAttachMatch }) {
-  const [teamId, setTeamId] = useState('');
+  const [pickedTeam, setPickedTeam] = useState('');
 
   // The general feed is not team-scoped and returns every team's rows, which
   // makes it the honest source for "which team ids does this match actually
@@ -45,15 +45,10 @@ export default function TabTeamIntelligence({ matchId, goToTab, onAttachMatch })
     return [...new Set(teamIntel.data.map((metric) => metric.team_id).filter(Boolean))];
   }, [teamIntel.data]);
 
-  // Adopt the first real team id once it is known, instead of leaving the
-  // formation call pointed at the endpoint's "unassigned" default.
-  useEffect(() => {
-    if (!teamId && availableTeams.length) setTeamId(availableTeams[0]);
-  }, [availableTeams, teamId]);
-
-  useEffect(() => {
-    setTeamId('');
-  }, [matchId]);
+  // Until the user picks a team, use the first real team id this match has.
+  // Derived during render; DashboardApp keys this tab by matchId, so a new
+  // match starts with no pick.
+  const teamId = pickedTeam || availableTeams[0] || '';
 
   const scopedReady = Boolean(matchId) && Boolean(teamId);
 
@@ -90,7 +85,7 @@ export default function TabTeamIntelligence({ matchId, goToTab, onAttachMatch })
                     key={id}
                     type="button"
                     className={`dash-pill ${teamId === id ? 'is-active' : ''}`.trim()}
-                    onClick={() => setTeamId(id)}
+                    onClick={() => setPickedTeam(id)}
                   >
                     {id}
                   </button>

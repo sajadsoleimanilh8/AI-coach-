@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import api from '../../api/client.js';
 import { useAction, useAsync } from '../../hooks/useAsync.js';
@@ -88,11 +88,6 @@ export default function TabSimulation({ matchId, jobId, goToTab, onAttachMatch }
     return [...ids].map((id) => ({ value: id, label: id }));
   }, [roster.data]);
 
-  useEffect(() => {
-    simulation.reset();
-    setInterventions([blankIntervention()]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [matchId]);
 
   const update = (key, patch) => {
     setInterventions((list) =>

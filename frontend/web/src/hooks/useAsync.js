@@ -1,4 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from 'react';
+
+function sameDeps(a, b) {
+  return a.length === b.length && a.every((value, i) => Object.is(value, b[i]));
+}
 
 /**
  * Runs an async loader and exposes the three states every view in this
@@ -24,27 +28,35 @@ export function useAsync(loader, deps = [], { enabled = true } = {}) {
     error: null,
   });
 
-  // Kept in a ref so `reload` is stable across renders and callers can drop
-  // it into an onClick without re-subscribing anything.
-  const loaderRef = useRef(loader);
-  loaderRef.current = loader;
-
   const [nonce, setNonce] = useState(0);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
+  // When the inputs change, move to loading (or idle) in the same render
+  // instead of rendering stale data once and correcting it from an effect.
+  // This is React's "adjust state when a prop changes" pattern: comparing
+  // against the previous inputs held in state, during render.
+  const inputs = [...deps, enabled, nonce];
+  const [prevInputs, setPrevInputs] = useState(inputs);
+  if (!sameDeps(prevInputs, inputs)) {
+    setPrevInputs(inputs);
+    setState((previous) =>
+      enabled
+        ? { ...previous, status: 'loading', error: null }
+        : { status: 'idle', data: null, error: null },
+    );
+  }
+
+  // Always calls the latest loader without making it an effect dependency, so
+  // an inline arrow function does not refetch on every render.
+  const runLoader = useEffectEvent((signal) => loader(signal));
+
   useEffect(() => {
-    if (!enabled) {
-      setState({ status: 'idle', data: null, error: null });
-      return undefined;
-    }
+    if (!enabled) return undefined;
 
     const controller = new AbortController();
     let active = true;
 
-    setState((previous) => ({ ...previous, status: 'loading', error: null }));
-
-    loaderRef
-      .current(controller.signal)
+    runLoader(controller.signal)
       .then((data) => {
         if (!active) return;
         setState({ status: 'success', data, error: null });
@@ -75,7 +87,13 @@ export function useAction(action) {
   const controllerRef = useRef(null);
   const mountedRef = useRef(true);
   const actionRef = useRef(action);
-  actionRef.current = action;
+
+  // Keep the latest action for run() without re-creating run() on every
+  // render. Written in a layout effect, not during render, so the ref is
+  // never mutated while React may still discard that render.
+  useLayoutEffect(() => {
+    actionRef.current = action;
+  });
 
   useEffect(() => {
     // StrictMode (dev only) deliberately runs this effect's setup, then its
