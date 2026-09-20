@@ -18,6 +18,11 @@ Notable changes to this project. The format follows
   accepted only when the filename has a video extension.
 - CORS now lists allowed methods and headers explicitly instead of `*`.
 
+### Added
+- MIT `LICENSE`, declared in `pyproject.toml` via PEP 639. The build backend
+  pin moved to `setuptools>=77`, the first version that reads a plain-string
+  `license` field.
+
 ### Fixed
 - `GET /api/tactical/formation` returned 404 and `team_shape` returned `[]` for
   every processed match. Both required `team_id=team-home`, but the pipeline
@@ -41,6 +46,9 @@ Notable changes to this project. The format follows
   `max_length` only when its args are an `SFTConfig`, so `max_seq_length`
   reached the VRAM planner and nothing else -- the "1024 -> 512" OOM remedy it
   prints was a no-op.
+- Running an Alembic migration silenced the application's logging. `env.py`
+  imports the models before calling `fileConfig`, whose `disable_existing_loggers`
+  defaults to `True`, so every logger created by that import was switched off.
 - `VectorStore.init()` was declared on two implementations but not on the ABC.
 - `backend/Dockerfile` did not copy `configs/`, so the image failed on
   `from configs import registry` when the first job ran.

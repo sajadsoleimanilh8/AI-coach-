@@ -22,7 +22,11 @@ from backend.database.session import DATABASE_URL, Base
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers defaults to True, which would switch off every
+    # logger that already exists -- i.e. the whole application's, since env.py
+    # imports the models first. Running a migration in-process (as the
+    # migration-drift test does) left the app silent afterwards.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL", DATABASE_URL))
 target_metadata = Base.metadata

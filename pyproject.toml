@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,8 @@ name = "sports-strategy-coach-ai"
 version = "0.1.0"
 description = "Football match video analytics: detection, tracking, tactical scoring, and an LLM coaching layer."
 readme = "README.md"
-# license: not declared yet -- the owner has not chosen one. Add it with LICENSE.
+license = "MIT"
+license-files = ["LICENSE"]
 # 3.11 specifically. RUN.md explains why: mediapipe 0.10.14 has no wheels for
 # 3.13, and that is the pin the CV stack is built around.
 requires-python = ">=3.11,<3.13"

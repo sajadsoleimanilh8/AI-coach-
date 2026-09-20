@@ -60,3 +60,8 @@ changed and why.
 `ai/` holds only modules that are actually implemented. The blueprint slots
 that have no code are listed in [ai/README.md](ai/README.md), which is the
 record of the gap between the blueprint and the code.
+
+## License
+
+[MIT](LICENSE). The third-party models and datasets this project downloads
+carry their own licences, which this one does not override.
