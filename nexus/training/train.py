@@ -424,9 +424,8 @@ def train(config: TrainingConfig, *, dataset_path: str | Path, resume: bool = Fa
         BitsAndBytesConfig,
         EarlyStoppingCallback,
         TrainerCallback,
-        TrainingArguments,
     )
-    from trl import SFTTrainer
+    from trl import SFTConfig, SFTTrainer
 
     from datasets import load_dataset
 
@@ -479,7 +478,8 @@ def train(config: TrainingConfig, *, dataset_path: str | Path, resume: bool = Fa
         config.base_model,
         quantization_config=quantization_config,
         device_map={"": 0},
-        torch_dtype=getattr(torch, config.bnb_4bit_compute_dtype),
+        # transformers 5 dropped the `torch_dtype` alias for this argument.
+        dtype=getattr(torch, config.bnb_4bit_compute_dtype),
         **from_pretrained_kwargs,
     )
     if config.load_in_4bit:
@@ -515,8 +515,14 @@ def train(config: TrainingConfig, *, dataset_path: str | Path, resume: bool = Fa
     dataset = load_dataset("json", data_files=str(train_path), split="train")
     eval_dataset = load_dataset("json", data_files=str(val_path), split="train")
 
-    training_arguments = TrainingArguments(
+    # SFTConfig rather than a bare TrainingArguments: SFTTrainer would
+    # silently coerce one, but only SFTConfig carries max_length, and without
+    # it max_seq_length reaches the VRAM estimate and nothing else -- which
+    # would make the "max_seq_length 1024 -> 512" OOM remedy printed above a
+    # no-op, since the trainer would keep tokenising at the library default.
+    training_arguments = SFTConfig(
         output_dir=config.output_dir,
+        max_length=config.max_seq_length,
         num_train_epochs=config.num_epochs,
         per_device_train_batch_size=config.batch_size,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
