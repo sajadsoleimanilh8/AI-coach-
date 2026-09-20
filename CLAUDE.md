@@ -32,10 +32,9 @@ README.md and RUN.md.
   IPv4, and `localhost` can resolve to `::1` first.
 - The overlay renderer tries `avc1` (.mp4) and falls back to `VP80` (.webm),
   depending on which codec the local OpenCV build can write.
-- The repo is currently checked out three levels deep
-  (`D:\SportsStrategyCoachAI\SportsStrategyCoachAI\SportsStrategyCoachAI`).
-  `.claude/worktrees/gpu-training/` is a stale full copy; exclude it from
-  searches.
+- The working checkout is `D:\ssc`. Datasets, `football_v1/` and training
+  `runs/` are in `D:\ssc-data\`; the extracted Docker and Ollama installers
+  are in `D:	ools\`. Nothing outside `D:\ssc` is part of the repo.
 
 ## Commands
 

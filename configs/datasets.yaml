@@ -1,4 +1,4 @@
-root_default_windows: "D:/SportsStrategyCoachAI/SportsStrategyCoachAI/datasets/processed"
+root_default_windows: "D:/ssc-data/datasets/processed"
 root_default_posix: "/data/sportsstrategycoachai/datasets/processed"
 
 required_splits: [train, valid, test]
