@@ -80,9 +80,10 @@ README.md and RUN.md.
 - `ai/` contains only implemented modules; `ai/README.md` records the
   blueprint slots that have no code.
 
-## Known state (2026-09-17)
+## Known state (2026-09-20)
 
-- `ruff check .` passes; coverage 79.2% overall, pipeline stages 86%.
+- `ruff check .` passes; coverage 87.3% overall (1,481 tests), pipeline
+  stages 86%.
 - **`tests/test_pipeline_e2e.py` fingerprints the real pipeline's output.** If
   it fails after a change you did NOT intend to alter results, you changed
   behaviour. If you did intend it, re-run with `SSC_UPDATE_PIPELINE_GOLDEN=1`
@@ -90,9 +91,14 @@ README.md and RUN.md.
 - Import test helpers in `tests/` as sibling modules (`from pipeline_snapshot
   import ...`): ultralytics installs a top-level `tests` package that shadows
   `tests.*`.
-- mypy baseline: 508 errors in 92 files (CI reports but does not gate).
-- ESLint: 0 errors, 22 warnings. Most are React Compiler rules on `useAsync`,
-  downgraded to warnings on purpose.
+- mypy baseline: 346 errors (CI reports but does not gate). Roughly 239 of
+  those are in test fakes; app code is at 107.
+- ESLint: 0 errors, 0 warnings. The React Compiler rules that had been
+  downgraded (`set-state-in-effect`, `refs`) are back at error level -- the
+  hooks now adjust state during render instead of from an effect.
+- Redis is optional. When it is not running the cache trips a circuit breaker
+  after a 250 ms timeout and skips it for 30 s, so a missing Redis costs
+  milliseconds, not seconds. `REDIS_URL` must be `127.0.0.1`, not `localhost`.
 - Pipeline memory is NOT a blocker: measured on a real clip, every whole-video
   structure together is ~1.9 MB per 15 s, about 0.7 GB for a 90-minute match.
   Streaming would require changing global algorithms (re-id merge, team

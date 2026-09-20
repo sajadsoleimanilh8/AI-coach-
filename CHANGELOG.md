@@ -19,6 +19,29 @@ Notable changes to this project. The format follows
 - CORS now lists allowed methods and headers explicitly instead of `*`.
 
 ### Fixed
+- `GET /api/tactical/formation` returned 404 and `team_shape` returned `[]` for
+  every processed match. Both required `team_id=team-home`, but the pipeline
+  writes whichever team labels clustering produced (often `unassigned`). The
+  parameter is now optional: formation picks the best-ranked team present and
+  `team_shape` returns every team's rows.
+- Each Redis call blocked ~4 seconds per attempt when no server was running,
+  about 8 s on a cached endpoint, because the client used the library's default
+  timeouts. Connections now time out in 250 ms and a tripped circuit skips
+  Redis entirely for 30 s, logging once per outage rather than per request. The
+  tactical test module went from 57 s to 1.6 s.
+- The `REDIS_URL` default was `localhost`, which resolves to IPv6 `::1` first on
+  Windows and waits for that to fail; it is now `127.0.0.1`.
+- The tracking overlay re-requested its window on every render while the
+  playhead sat in the last 40 frames of one: the auto-pager stepped the window
+  past the playhead and the backward-seek rule pulled it straight back. A run
+  against the old code made 6,083 requests in 3 seconds and left the backend
+  unresponsive; the same clip now makes 5. The paging rule is one pure function
+  (`matchAnalysis/paging.js`) with tests that assert it settles.
+- `transformers` 5 removed the `torch_dtype` alias, and `SFTTrainer` honours
+  `max_length` only when its args are an `SFTConfig`, so `max_seq_length`
+  reached the VRAM planner and nothing else -- the "1024 -> 512" OOM remedy it
+  prints was a no-op.
+- `VectorStore.init()` was declared on two implementations but not on the ABC.
 - `backend/Dockerfile` did not copy `configs/`, so the image failed on
   `from configs import registry` when the first job ran.
 - `nexus/Dockerfile` did not copy `ai/`, so that container exited at startup
@@ -40,6 +63,20 @@ Notable changes to this project. The format follows
   order. It now checks in a fresh subprocess. The full suite passes: 1,330 tests.
 
 ### Changed
+- `backend/database/models.py` uses SQLAlchemy 2.0 typed declarations
+  (`DeclarativeBase`, `Mapped[...]`, `mapped_column`) for all 157 columns, each
+  with an explicit `nullable=` so the annotation cannot change the schema. The
+  migration-drift test and the pipeline fingerprint both confirm the schema is
+  unchanged. mypy: 498 errors to 346.
+- The deprecated `@app.on_event("startup")` hook is now a `lifespan` context
+  manager.
+- The dashboard's data-loading hooks adjust state during render instead of in
+  an effect, so a tab shows its loading state on the first render rather than
+  one stale frame of the previous match's data. The two ESLint rules that had
+  been downgraded to warnings for this are back at error level: 22 warnings to
+  0.
+- Coverage 79.2% to 87.3% (1,481 tests), covering first-touch scoring, manual
+  calibration, the phased training splits and the psychology loader.
 - `backend/pipeline/runner.py` (1,968 lines) is now the orchestrator only.
   Stage code moved verbatim into `detection.py`, `calibration.py`,
   `trajectories.py`, `events.py`, `team_scoring.py`, `player_scoring.py`,
