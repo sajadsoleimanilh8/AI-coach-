@@ -116,7 +116,12 @@ typing-inspection==0.4.2
 typing_extensions==4.16.0
 tzdata==2026.3
 tzlocal==5.4.4
-ultralytics==8.4.116
+# 8.4.98, not a newer one: the player run's checkpoints carry an optimizer
+# state built by this version, and 8.4.116's optimizer=auto picks MuSGD,
+# whose parameter groups do not match -- resuming raises. ai/computer_vision/
+# train_parts.py also verifies its stop-without-final_eval mechanism against
+# this version's trainer.py. Upgrade only between complete training runs.
+ultralytics==8.4.98
 ultralytics-thop==2.1.6
 urllib3==2.7.0
 uvicorn==0.52.1

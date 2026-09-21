@@ -219,6 +219,41 @@ class PartProgress:
 # Running one Part
 # ----------------------------------------------------------------------
 
+
+def repair_checkpoint_paths(last_pt: Path, project: Path, run_name: str) -> bool:
+    """
+    Points a checkpoint's stored output paths at the CURRENT run directory.
+
+    On resume, ultralytics rebuilds its config from the args saved inside the
+    checkpoint, and `project`/`save_dir` are among them. After the checkout
+    moves, those still name the old location: ultralytics recreates that tree
+    and writes every new weight file into it, while this module keeps reading
+    last.pt under the current root -- so the ledger sees no progress and the
+    epochs are silently written somewhere nobody looks.
+
+    Returns True when the checkpoint was rewritten.
+    """
+    import torch
+
+    if not last_pt.exists():
+        return False
+    ckpt = torch.load(last_pt, map_location="cpu", weights_only=False)
+    args = ckpt.get("train_args")
+    if not isinstance(args, dict):
+        return False
+
+    wanted = {"project": str(project), "save_dir": str(project / run_name)}
+    if all(str(args.get(k, "")) == v for k, v in wanted.items()):
+        return False
+
+    args.update(wanted)
+    tmp = last_pt.with_suffix(".pt.repairing")
+    torch.save(ckpt, tmp)
+    tmp.replace(last_pt)
+    print(f"  repaired checkpoint output path -> {wanted['save_dir']}")
+    return True
+
+
 def run_part(model_name: str, part: int, total_parts: int, *,
              force: bool = False, overrides: dict | None = None,
              stop_at: int | None = None) -> dict:
@@ -301,6 +336,8 @@ def run_part(model_name: str, part: int, total_parts: int, *,
     from ultralytics import YOLO
 
     resume = ckpt_epoch is not None and ckpt_epoch > 0
+    if resume:
+        repair_checkpoint_paths(last_pt, R.runs_root(), spec.run_name)
     args = dict(spec.train)
     args.update(overrides or {})
     args.update({
