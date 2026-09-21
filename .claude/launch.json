@@ -1,0 +1,22 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "frontend/web", "run", "dev"],
+      "port": 3000,
+      "url": "http://127.0.0.1:3000"
+    },
+    {
+      "name": "backend",
+      "runtimeExecutable": "venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "-c",
+        "import uvicorn; uvicorn.run('backend.api.main:app', host='127.0.0.1', port=8000)"
+      ],
+      "port": 8000,
+      "url": "http://127.0.0.1:8000"
+    }
+  ]
+}
