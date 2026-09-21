@@ -551,14 +551,21 @@ def finalize(model_name: str, total_parts: int, *, force: bool = False) -> dict:
 
     box = metrics.get("box", {})
     dup = {k: v["count"] - v["unique"] for k, v in manifest_counts.items()}
-    failed = [p for p, v in state.data.get("parts", {}).items()
-              if v.get("status") != "completed"]
+    # A paused Part was stopped on purpose and is resumable; calling that
+    # "failed" in the report that outlives the run would misread a deliberate
+    # stop as a crash.
+    unfinished = {p: v.get("status") for p, v in state.data.get("parts", {}).items()
+                  if v.get("status") != "completed"}
+    failed = [p for p, st in unfinished.items() if st != "paused"]
+    paused = [p for p, st in unfinished.items() if st == "paused"]
     print(f"\n{'=' * 62}\n  FINAL INTEGRITY REPORT\n{'=' * 62}")
     print(f"  total images         : {n_images:,}")
     print(f"  total labels         : {n_labels:,}")
     print(f"  missing label files  : {max(n_images - n_labels, 0):,}")
     print(f"  duplicate entries    : {dup or 'none'}")
     print(f"  failed parts         : {failed or 'none'}")
+    if paused:
+        print(f"  paused parts         : {paused} (stopped deliberately, resumable)")
     print(f"  epochs trained       : {final_epoch}/{total_epochs} across {total_parts} parts")
     if box:
         print(f"  precision / recall   : {box.get('precision', float('nan')):.4f}"

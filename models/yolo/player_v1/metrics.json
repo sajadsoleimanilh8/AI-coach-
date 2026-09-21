@@ -4,7 +4,7 @@
   "dataset": "player",
   "trained_in_parts": 6,
   "total_epochs": 100,
-  "final_checkpoint_epoch": 68,
+  "final_checkpoint_epoch": 76,
   "parts": {
     "1": {
       "status": "completed",
@@ -41,9 +41,18 @@
       "started_at": "2026-08-13T09:20:12.189638+00:00",
       "finished_at": "2026-08-13T10:26:40.365733+00:00",
       "note": ""
+    },
+    "5": {
+      "status": "paused",
+      "start_epoch": 69,
+      "end_epoch": 84,
+      "epochs_run": 8,
+      "started_at": "2026-09-21T07:33:09.336361+00:00",
+      "finished_at": "2026-09-21T08:07:00.265879+00:00",
+      "note": "checkpoint reached epoch 76, expected 84; re-run this Part to finish it"
     }
   },
-  "weights": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\models\\yolo\\player_v1\\weights\\best.pt",
+  "weights": "D:\\ssc\\models\\yolo\\player_v1\\weights\\best.pt",
   "dataset_images": 13480,
   "dataset_labels": 13468,
   "split_manifests": {
@@ -83,14 +92,14 @@
         "map50_95": 0.6630621102761016
       }
     },
-    "confusion_matrix_png": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\train\\player_v1_val_test\\confusion_matrix.png",
-    "save_dir": "D:\\SportsStrategyCoachAI\\SportsStrategyCoachAI\\runs\\train\\player_v1_val_test-2"
+    "confusion_matrix_png": "D:\\ssc\\runs\\train\\player_v1_val_test\\confusion_matrix.png",
+    "save_dir": "D:\\ssc\\runs\\train\\player_v1_val_test-3"
   },
-  "finalized_at": "2026-08-13T10:38:03.020382+00:00",
+  "finalized_at": "2026-09-21T08:09:24.603538+00:00",
   "environment": {
     "python": "3.11.0",
     "platform": "Windows-10-10.0.28000-SP0",
-    "git_sha": "2838b6f",
+    "git_sha": "7f3aa3e",
     "torch": "2.11.0+cu128",
     "cuda_available": true,
     "gpu": "NVIDIA GeForce RTX 5070 Ti Laptop GPU",
