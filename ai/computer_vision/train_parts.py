@@ -220,10 +220,18 @@ class PartProgress:
 # ----------------------------------------------------------------------
 
 def run_part(model_name: str, part: int, total_parts: int, *,
-             force: bool = False, overrides: dict | None = None) -> dict:
+             force: bool = False, overrides: dict | None = None,
+             stop_at: int | None = None) -> dict:
     """
     Trains exactly ONE Part and returns a summary. Never starts the next
     Part -- that is the operator's decision, by design.
+
+    `stop_at` pauses INSIDE a Part, at that absolute epoch, for splitting a
+    Part too long to sit through in one go. It changes nothing about the
+    training itself: `epochs` stays the full schedule either way, so the
+    learning-rate curve is identical to an uninterrupted run and only the
+    pause point moves. The Part is recorded as paused, not completed, and
+    re-running the same command finishes its remaining epochs.
     """
     from ai.computer_vision.train_common import preflight
 
@@ -233,6 +241,10 @@ def run_part(model_name: str, part: int, total_parts: int, *,
     if not 1 <= part <= total_parts:
         raise ValueError(f"--part must be 1..{total_parts} (got {part})")
     plan = plans[part - 1]
+    if stop_at is not None and not plan.start_epoch <= stop_at <= plan.end_epoch:
+        raise ValueError(
+            f"--stop-at must fall inside Part {part}'s range "
+            f"{plan.start_epoch}-{plan.end_epoch} (got {stop_at})")
 
     run_dir = R.runs_root() / spec.run_name
     state = PartsState(run_dir / "parts_state.json")
@@ -304,12 +316,15 @@ def run_part(model_name: str, part: int, total_parts: int, *,
 
     model = YOLO(str(last_pt) if resume else spec.base_weights)
 
-    is_final_part = plan.end_epoch >= total_epochs
+    # A pause inside a Part is just another chunk boundary: it must raise
+    # so the checkpoint keeps its optimizer state, never reach final_eval.
+    stop_epoch = min(stop_at, plan.end_epoch) if stop_at is not None else plan.end_epoch
+    is_final_part = plan.end_epoch >= total_epochs and stop_epoch >= total_epochs
 
     def _on_epoch_end(trainer):
         absolute = int(trainer.epoch) + 1
         progress.update(absolute)
-        if absolute >= plan.end_epoch and not is_final_part:
+        if absolute >= stop_epoch and not is_final_part:
             # Abort by RAISING, not by setting trainer.stop.
             #
             # Verified against ultralytics/engine/trainer.py (8.4.98):
@@ -331,7 +346,7 @@ def run_part(model_name: str, part: int, total_parts: int, *,
             # natural end so final_eval() does run and best.pt is properly
             # finalized.
             print(f"\n  >> Part {plan.part} epoch budget reached "
-                  f"({plan.end_epoch}). Stopping before final_eval to keep "
+                  f"({stop_epoch}). Stopping before final_eval to keep "
                   f"the checkpoint resumable.", flush=True)
             raise ChunkComplete(absolute)
 
@@ -359,7 +374,8 @@ def run_part(model_name: str, part: int, total_parts: int, *,
     # A Part only counts as completed if the checkpoint really reached its
     # last epoch -- never on the basis of train() simply returning.
     if status == "completed" and (final_epoch or 0) < plan.end_epoch:
-        status = "incomplete"
+        paused = stop_at is not None and (final_epoch or 0) >= stop_epoch
+        status = "paused" if paused else "incomplete"
         note = (f"checkpoint reached epoch {final_epoch}, expected "
                 f"{plan.end_epoch}; re-run this Part to finish it")
 
@@ -372,8 +388,10 @@ def run_part(model_name: str, part: int, total_parts: int, *,
                        if p not in state.completed()]
     print(f"\n{'=' * 62}\n  PART {part}/{total_parts} SUMMARY\n{'=' * 62}")
     print(f"  status            : {status.upper()}")
-    print(f"  epochs this part  : {max(epochs_run, 0)} "
-          f"(target {plan.n_epochs}: {plan.start_epoch}-{plan.end_epoch})")
+    target = (f"{plan.n_epochs}: {plan.start_epoch}-{plan.end_epoch}"
+              if stop_at is None else
+              f"paused at {stop_epoch} of {plan.start_epoch}-{plan.end_epoch}")
+    print(f"  epochs this part  : {max(epochs_run, 0)} (target {target})")
     print(f"  checkpoint epoch  : {final_epoch}/{total_epochs}")
     print(f"  elapsed           : {elapsed}")
     print(f"  parts completed   : {sorted(state.completed())}")

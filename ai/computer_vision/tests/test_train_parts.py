@@ -159,3 +159,58 @@ def test_ledger_file_is_plain_json(tmp_path):
     path = tmp_path / "parts_state.json"
     PartsState(path).record(_plan(), status="completed", started="a", finished="b", epochs_run=10)
     assert json.loads(path.read_text(encoding="utf-8"))["parts"]["1"]["status"] == "completed"
+
+# --- pausing inside a Part (--stop-at) -------------------------------------------
+#
+# Splitting a Part must not change the training, only where it pauses. The
+# epoch budget passed to ultralytics is always the FULL schedule so the
+# learning-rate curve is identical either way; --stop-at only moves the epoch
+# at which the callback raises. These pin the guard and the bookkeeping,
+# which are the parts that can silently lose epochs.
+
+
+def _stub_preflight(monkeypatch, tmp_path, total_epochs=100):
+    """Enough of a model spec for run_part to reach its --stop-at guard."""
+    from ai.computer_vision import train_common
+
+    spec = train_parts.R.get_model("player")
+    monkeypatch.setattr(spec.__class__, "train",
+                        property(lambda self: {"epochs": total_epochs}), raising=False)
+    monkeypatch.setattr(train_common, "preflight",
+                        lambda name: (spec, tmp_path / "data.yaml"))
+    monkeypatch.setattr(train_parts.R, "runs_root", lambda: tmp_path)
+    return spec
+
+
+@pytest.mark.parametrize("stop_at", [68, 85, 0, -1, 101])
+def test_stop_at_outside_the_part_is_rejected(tmp_path, monkeypatch, stop_at):
+    """Part 5 is epochs 69-84. A stop point outside it would either re-run
+    finished epochs or skip unfinished ones, so it must not be accepted."""
+    _stub_preflight(monkeypatch, tmp_path)
+    with pytest.raises(ValueError, match="stop-at"):
+        train_parts.run_part("player", 5, 6, stop_at=stop_at)
+
+
+@pytest.mark.parametrize("stop_at", [69, 76, 84])
+def test_stop_at_inside_the_part_is_accepted(tmp_path, monkeypatch, stop_at):
+    """The boundaries themselves are legal: the first epoch of the Part, a
+    midpoint, and its last epoch (which is simply the normal behaviour)."""
+    _stub_preflight(monkeypatch, tmp_path)
+    # Fails later, when it tries to train -- but past the guard, which is
+    # what this asserts.
+    with pytest.raises(Exception) as exc:
+        train_parts.run_part("player", 5, 6, stop_at=stop_at)
+    assert "stop-at" not in str(exc.value)
+
+
+def test_a_paused_part_is_not_recorded_as_completed(tmp_path):
+    """The ledger must never mark a Part done while some of its epochs are
+    unrun: the next Part would start from the wrong epoch and the gap would
+    never be trained."""
+    state = PartsState(tmp_path / "parts_state.json")
+    plan = plan_parts(100, 6)[4]          # Part 5: epochs 69-84
+    state.record(plan, status="paused", started="s", finished="f", epochs_run=8)
+    assert 5 not in state.completed()
+
+    state.record(plan, status="completed", started="s", finished="f", epochs_run=16)
+    assert 5 in state.completed()

@@ -16,8 +16,11 @@ def calls(monkeypatch):
     monkeypatch.setattr(cli, "finalize", lambda m, n, force=False: log.append(("finalize", m, n, force)))
     monkeypatch.setattr(cli, "print_status", lambda m, n: log.append(("status", m, n)))
 
-    def fake_run_part(m, part, total, force, overrides):
-        log.append(("part", m, part, total, force, overrides))
+    def fake_run_part(m, part, total, force, overrides, stop_at=None):
+        log.append(("part", m, part, total, force, overrides, stop_at))
+        if stop_at is not None:
+            return {"status": "paused", "checkpoint_epoch": stop_at,
+                    "all_parts_done": False, "remaining_parts": [part]}
         return {"status": "completed", "all_parts_done": part == total, "remaining_parts": [part + 1]}
 
     monkeypatch.setattr(cli, "run_part", fake_run_part)
@@ -61,3 +64,24 @@ def test_unknown_model_fails_before_any_training(calls):
     with pytest.raises(RegistryError):
         cli.main(["no-such-model"])
     assert calls == []
+
+def test_stop_at_is_passed_through_to_run_part(calls):
+    cli.main(["player", "--part", "5", "--total-parts", "6", "--stop-at", "76"])
+    assert calls[-1] == ("part", "player", 5, 6, False, {}, 76)
+
+
+def test_a_paused_part_exits_zero_and_is_not_treated_as_a_failure(calls, capsys):
+    """Pausing is a deliberate stop, not an error: a non-zero exit would make
+    an operator think the run died and re-check the checkpoint by hand."""
+    rc = cli.main(["player", "--part", "5", "--total-parts", "6", "--stop-at", "76"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "PAUSED at epoch 76" in out
+    assert "is NOT finished" in out
+    # It must point back at the SAME Part, not forward to the next one.
+    assert "--part 5 --total-parts 6" in out
+
+
+def test_without_stop_at_nothing_is_passed(calls):
+    cli.main(["player", "--part", "1", "--total-parts", "6"])
+    assert calls[-1][-1] is None

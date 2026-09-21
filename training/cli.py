@@ -77,6 +77,10 @@ def build_parser(model: str | None) -> argparse.ArgumentParser:
                     help="evaluate + publish after all Parts are complete")
     ap.add_argument("--force", action="store_true",
                     help="re-run a completed Part / finalize despite gaps")
+    ap.add_argument("--stop-at", type=int, default=None,
+                    help="pause inside a Part at this ABSOLUTE epoch, for "
+                         "splitting a Part too long to run in one sitting; "
+                         "re-run the same command to finish the rest")
     ap.add_argument("--epochs", type=int, help="override configs/models.yaml")
     ap.add_argument("--batch", type=int, help="override configs/models.yaml")
     ap.add_argument("--imgsz", type=int, help="override configs/models.yaml")
@@ -103,7 +107,16 @@ def main(argv: list[str] | None = None, *, model: str | None = None) -> int:
         return 0
 
     if args.part is not None:
-        result = run_part(model, args.part, total_parts, force=args.force, overrides=overrides)
+        result = run_part(model, args.part, total_parts, force=args.force,
+                          overrides=overrides, stop_at=args.stop_at)
+
+        if result["status"] == "paused":
+            print(f"\n  PAUSED at epoch {result['checkpoint_epoch']}. Part "
+                  f"{args.part} is NOT finished -- its remaining epochs still "
+                  f"have to run.\n  Continue it with:\n\n"
+                  f"      python -m training.train {model} "
+                  f"--part {args.part} --total-parts {total_parts}\n")
+            return 0
 
         if result["status"] not in ("completed", "already_completed"):
             print(f"\n  Part {args.part} did not complete ({result['status']}). "
