@@ -370,7 +370,23 @@ def build_data_yaml(name: str, out_dir: Path | None = None,
 
         manifest_dir = out_dir / name
         needed = [manifest_dir / f"{k}.txt" for k in ("train", "val", "test")]
-        if refresh or not all(p.exists() for p in needed):
+        # A manifest holds ABSOLUTE image paths, so existing is not the same
+        # as usable: after the dataset root moves, a cached manifest points
+        # at paths that are all gone and ultralytics trains on an empty set
+        # instead of failing. Rebuild whenever the cached paths no longer
+        # live under the current root.
+        stale = refresh or not all(p.exists() for p in needed)
+        if not stale:
+            root = str(dataset_root().resolve()).lower()
+            for m in needed:
+                first = next(
+                    (ln.strip() for ln in m.read_text(encoding="utf-8").splitlines() if ln.strip()),
+                    None,
+                )
+                if first is not None and not first.lower().startswith(root):
+                    stale = True
+                    break
+        if stale:
             build_manifests(name, manifest_dir)
         split_value = {k: str(manifest_dir / f"{k}.txt") for k in ("train", "val", "test")}
     else:
