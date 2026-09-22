@@ -4,7 +4,7 @@
   "dataset": "player",
   "trained_in_parts": 6,
   "total_epochs": 100,
-  "final_checkpoint_epoch": 76,
+  "final_checkpoint_epoch": 100,
   "parts": {
     "1": {
       "status": "completed",
@@ -43,13 +43,22 @@
       "note": ""
     },
     "5": {
-      "status": "paused",
+      "status": "completed",
       "start_epoch": 69,
       "end_epoch": 84,
-      "epochs_run": 8,
-      "started_at": "2026-09-21T07:33:09.336361+00:00",
-      "finished_at": "2026-09-21T08:07:00.265879+00:00",
-      "note": "checkpoint reached epoch 76, expected 84; re-run this Part to finish it"
+      "epochs_run": 16,
+      "started_at": "2026-09-21T09:44:49.091926+00:00",
+      "finished_at": "2026-09-21T10:13:24.210894+00:00",
+      "note": ""
+    },
+    "6": {
+      "status": "completed",
+      "start_epoch": 85,
+      "end_epoch": 100,
+      "epochs_run": 16,
+      "started_at": "2026-09-22T07:27:53.756751+00:00",
+      "finished_at": "2026-09-22T08:30:32.538068+00:00",
+      "note": ""
     }
   },
   "weights": "D:\\ssc\\models\\yolo\\player_v1\\weights\\best.pt",
@@ -71,6 +80,11 @@
   },
   "metrics": {
     "split": "test",
+    "settings": {
+      "imgsz": 960,
+      "conf": 0.001,
+      "iou": 0.6
+    },
     "raw": {
       "metrics/precision(B)": 0.9766305447310867,
       "metrics/recall(B)": 0.9678535917610741,
@@ -93,13 +107,13 @@
       }
     },
     "confusion_matrix_png": "D:\\ssc\\runs\\train\\player_v1_val_test\\confusion_matrix.png",
-    "save_dir": "D:\\ssc\\runs\\train\\player_v1_val_test-3"
+    "save_dir": "D:\\ssc\\runs\\train\\player_v1_val_test-5"
   },
-  "finalized_at": "2026-09-21T08:09:24.603538+00:00",
+  "finalized_at": "2026-09-22T09:10:05.826373+00:00",
   "environment": {
     "python": "3.11.0",
     "platform": "Windows-10-10.0.28000-SP0",
-    "git_sha": "7f3aa3e",
+    "git_sha": "2d2bb84",
     "torch": "2.11.0+cu128",
     "cuda_available": true,
     "gpu": "NVIDIA GeForce RTX 5070 Ti Laptop GPU",

@@ -189,16 +189,24 @@ def evaluate_model(spec: R.ModelSpec, *, model=None, data_yaml: Path | None = No
     if data_yaml is None:
         data_yaml = R.build_data_yaml(spec.dataset)
 
+    # Kept in one dict because they are reported next to the metrics they
+    # produced: mAP is meaningless without them. Re-running with
+    # ultralytics' own val defaults (iou=0.7) instead of iou=0.6 moves
+    # mAP50 by ~0.005 on the player set, since players overlap heavily and
+    # the NMS threshold decides how many overlapping boxes survive.
+    eval_settings = {
+        "imgsz": spec.inference.get("imgsz", spec.train.get("imgsz", 640)),
+        "conf": 0.001,   # standard for mAP computation -- NOT the deploy conf
+        "iou": 0.6,
+    }
     res = model.val(
         data=str(data_yaml), split=split,
-        imgsz=spec.inference.get("imgsz", spec.train.get("imgsz", 640)),
-        conf=0.001,      # standard for mAP computation -- NOT the deploy conf
-        iou=0.6,
+        **eval_settings,
         plots=True,
         project=str(R.runs_root()), name=f"{spec.run_name}_val_{split}",
     )
 
-    out: dict[str, Any] = {"split": split, "raw": {}}
+    out: dict[str, Any] = {"split": split, "settings": eval_settings, "raw": {}}
     try:
         out["raw"] = {k: float(v) for k, v in res.results_dict.items()
                       if isinstance(v, (int, float))}
